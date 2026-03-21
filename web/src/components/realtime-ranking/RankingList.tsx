@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import RankingRow from "@/components/realtime-ranking/RankingRow";
 import { RealtimeRankingEntryWithDiff, RealtimeRankingMasterData } from "@/types/realtime-ranking";
 import { AssetSourceType } from "@/contexts/ThemeContext";
@@ -31,15 +32,26 @@ export default function RankingList({ entries, masterData, assetSource, secondsS
 
             {/* Rows */}
             <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                {entries.map((entry) => (
-                    <RankingRow
-                        key={entry.userId}
-                        entry={entry}
-                        masterData={masterData}
-                        assetSource={assetSource}
-                        secondsSinceUpdate={secondsSinceUpdate}
-                    />
-                ))}
+                {entries.map((entry, index) => {
+                    const prevRank = index > 0 ? entries[index - 1].rank : 0;
+                    const showNotice = entry.rank > 100 && prevRank <= 100;
+                    return (
+                        <React.Fragment key={entry.userId}>
+                            {showNotice && (
+                                <div className="flex items-center gap-2 border-y border-amber-200/60 bg-amber-50/70 px-4 py-2 text-[11px] text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400">
+                                    <span className="text-base leading-none">⚠️</span>
+                                    <span>100 名以后的排名，游戏不支持高精度采集，数据可能存在延迟。</span>
+                                </div>
+                            )}
+                            <RankingRow
+                                entry={entry}
+                                masterData={masterData}
+                                assetSource={assetSource}
+                                secondsSinceUpdate={secondsSinceUpdate}
+                            />
+                        </React.Fragment>
+                    );
+                })}
             </div>
         </div>
     );
