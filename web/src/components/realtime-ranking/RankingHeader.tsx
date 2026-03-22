@@ -30,14 +30,14 @@ export default function RankingHeader({ region, onRegionChange, updatedAt, event
             {/* Controls */}
             <div className="flex flex-col sm:flex-row gap-4 mb-8 items-center sm:items-stretch">
                 {/* Region Toggle */}
-                <div className="flex bg-white rounded-xl border border-slate-200 p-1">
+                <div className="flex bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-1">
                     {(["cn", "jp"] as const).map((value) => (
                         <button
                             key={value}
                             onClick={() => onRegionChange(value)}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${region === value
                                 ? "bg-miku text-white shadow-md"
-                                : "text-slate-600 hover:bg-slate-50"
+                                : "text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
                                 }`}
                         >
                             {value === "cn" ? "国服" : "日服"}
@@ -48,17 +48,17 @@ export default function RankingHeader({ region, onRegionChange, updatedAt, event
                 {/* Status Tags */}
                 <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                     {typeof eventId === "number" && (
-                        <span className="rounded-full bg-slate-100 px-3 py-1.5 font-medium">活动 #{eventId}</span>
+                        <span className="rounded-full bg-slate-100 dark:bg-slate-800 dark:text-slate-300 px-3 py-1.5 font-medium">活动 #{eventId}</span>
                     )}
-                    <span className="rounded-full bg-slate-100 px-3 py-1.5 font-medium">共 {totalEntries} 条榜线</span>
+                    <span className="rounded-full bg-slate-100 dark:bg-slate-800 dark:text-slate-300 px-3 py-1.5 font-medium">共 {totalEntries} 条榜线</span>
                     <span className={`rounded-full px-3 py-1.5 font-medium ${isRefreshing
-                        ? "bg-amber-100 text-amber-700"
-                        : "bg-emerald-100 text-emerald-700"
+                        ? "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400"
+                        : "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400"
                         }`}>
                         {isRefreshing ? "刷新中..." : "已同步"}
                     </span>
                     {updatedAt ? (
-                        <span className="rounded-full bg-slate-100 px-3 py-1.5 font-medium">
+                        <span className="rounded-full bg-slate-100 dark:bg-slate-800 dark:text-slate-300 px-3 py-1.5 font-medium">
                             更新于 {new Date(updatedAt).toLocaleString()}
                         </span>
                     ) : null}

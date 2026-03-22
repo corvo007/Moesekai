@@ -127,6 +127,8 @@ function normalizeEntry(raw: RealtimeRankingRawEntry): RealtimeRankingEntry {
         signature: pickSignature(raw),
         leaderCardId: pickLeaderCardId(raw),
         leaderCharacterId: pickLeaderCharacterId(raw),
+        leaderCardDefaultImage: raw.leaderCard?.defaultImage,
+        leaderCardMasterRank: raw.leaderCard?.masterRank,
         honors: pickHonors(raw),
         raw,
     };

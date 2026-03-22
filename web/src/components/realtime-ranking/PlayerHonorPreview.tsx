@@ -79,7 +79,7 @@ export default function PlayerHonorPreview({ honors, masterData, assetSource, co
         return (
             <div className="relative max-w-full">
                 <div
-                    className="flex items-center gap-px overflow-x-auto"
+                    className="flex items-center gap-px overflow-x-auto [&::-webkit-scrollbar]:hidden"
                     style={{
                         scrollbarWidth: "none",
                         msOverflowStyle: "none",
@@ -89,7 +89,12 @@ export default function PlayerHonorPreview({ honors, masterData, assetSource, co
                     {honors.slice(0, 3).map((item, index) => renderHonorItem(item, index, sizeClass, masterData, assetSource))}
                 </div>
                 {/* 右侧渐变遮罩提示可滑动 */}
-                <div className="pointer-events-none absolute right-0 top-0 h-full w-4 bg-gradient-to-l from-white dark:from-slate-900" />
+                <div
+                    className="pointer-events-none absolute right-0 top-0 h-full w-4"
+                    style={{
+                        background: "linear-gradient(to left, var(--surface-base), transparent)",
+                    }}
+                />
             </div>
         );
     }

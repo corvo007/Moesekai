@@ -37,7 +37,7 @@ export default function CurrentEventCard({ event, assetSource, themeColor }: Cur
 
     return (
         <Link href={`/events/${event.id}`} className="block group mb-6">
-            <div className="relative flex h-32 md:h-36 rounded-2xl overflow-hidden glass-card border border-white/40 bg-white shadow-sm transition-transform hover:scale-[1.01] active:scale-[0.99] hover:shadow-md cursor-pointer">
+            <div className="relative flex h-32 md:h-36 rounded-2xl overflow-hidden glass-card border border-white/40 dark:border-slate-700/50 bg-white dark:bg-slate-800/80 shadow-sm transition-transform hover:scale-[1.01] active:scale-[0.99] hover:shadow-md cursor-pointer">
                 {/* Left Side: Background & Logo */}
                 <div className="w-[45%] relative overflow-hidden">
                     {hasBanner ? (
@@ -93,14 +93,14 @@ export default function CurrentEventCard({ event, assetSource, themeColor }: Cur
                             >
                                 {statusDisplay.label}
                             </span>
-                            <span className="text-[10px] font-bold text-slate-400">
+                            <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500">
                                 {eventTypeName}
                             </span>
                         </div>
                         <h3 className="font-bold text-primary-text text-sm sm:text-base leading-tight line-clamp-1" title={event.name}>
                             {event.name}
                         </h3>
-                        <div className="pt-2 text-[10px] sm:text-xs text-slate-400 font-mono flex flex-col sm:flex-row sm:gap-2">
+                        <div className="pt-2 text-[10px] sm:text-xs text-slate-400 dark:text-slate-500 font-mono flex flex-col sm:flex-row sm:gap-2">
                             <span>{formatDate(event.startAt)}</span>
                             <span className="hidden sm:inline">-</span>
                             <span>{formatDate(event.aggregateAt)}</span>

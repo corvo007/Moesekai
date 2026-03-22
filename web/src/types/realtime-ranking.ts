@@ -69,6 +69,8 @@ export interface RealtimeRankingEntry {
     signature?: string;
     leaderCardId?: number;
     leaderCharacterId?: number;
+    leaderCardDefaultImage?: "special_training" | "original" | string;
+    leaderCardMasterRank?: number;
     honors: NormalizedPlayerHonor[];
     raw: RealtimeRankingRawEntry;
 }

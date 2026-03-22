@@ -32,6 +32,8 @@ export default function RankingRow({ entry, masterData, assetSource, secondsSinc
         : undefined;
 
     const derivedLeaderCharacterId = entry.leaderCharacterId ?? leaderCard?.characterId;
+    const isTrained = entry.leaderCardDefaultImage === "special_training";
+    const masterRank = entry.leaderCardMasterRank ?? 0;
     const isTopThree = entry.rank <= 3;
     const isExtendedTier = entry.rank > 100;
 
@@ -137,7 +139,7 @@ export default function RankingRow({ entry, masterData, assetSource, secondsSinc
                 <div className="relative ml-2 w-16 shrink-0 sm:w-[72px]">
                     {leaderCard ? (
                         <div className={`overflow-hidden ${isTopThree ? topThreeCardDeco[entry.rank] : ""}`}>
-                            <SekaiCardThumbnail card={leaderCard} width={72} className="w-full" />
+                            <SekaiCardThumbnail card={leaderCard} trained={isTrained} mastery={masterRank} width={72} className="w-full" />
                         </div>
                     ) : derivedLeaderCharacterId ? (
                         <div className={`relative h-16 w-16 overflow-hidden border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900 sm:h-[72px] sm:w-[72px] ${isTopThree ? topThreeCardDeco[entry.rank] : ""}`}>
