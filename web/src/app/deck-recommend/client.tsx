@@ -11,7 +11,7 @@ import CharacterSelector from "@/components/deck-recommend/CharacterSelector";
 import SekaiCardThumbnail from "@/components/cards/SekaiCardThumbnail";
 import { fetchMasterData } from "@/lib/fetch";
 import { getCharacterIconUrl } from "@/lib/assets";
-import { saveToolState, getAccount, SERVER_OPTIONS } from "@/lib/account";
+import { saveToolState, getAccount, getOAuthAccessTokenForGameUser, SERVER_OPTIONS } from "@/lib/account";
 import AccountSelector from "@/components/AccountSelector";
 import EventSelector from "@/components/deck-recommend/EventSelector";
 import MusicSelector from "@/components/deck-recommend/MusicSelector";
@@ -568,7 +568,13 @@ export default function DeckRecommendClient() {
             setIsCalculating(false); setProgressStage("idle"); setProgressPercent(0);
             worker.terminate(); workerRef.current = null;
         };
-        worker.postMessage({ args: workerArgs });
+        const oauthAccessToken = getOAuthAccessTokenForGameUser(server, userId.trim());
+        worker.postMessage({
+            args: {
+                ...workerArgs,
+                oauthAccessToken,
+            },
+        });
     }, [userId, server, mode, characterId, eventId, liveType, supportCharacterId, musicId, difficulty, cardConfig, needsMusic, needsEvent, customSubMode, customUnit, customCharacterIds, customCharacterUnits, customAttr, leaderCharacterId, showLeaderSelect, strongestTarget]);
 
     const handleCancel = useCallback(() => {

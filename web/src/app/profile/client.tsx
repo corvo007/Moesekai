@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import MainLayout from "@/components/MainLayout";
 import ExternalLink from "@/components/ExternalLink";
 import AccountAvatar from "@/components/AccountAvatar";
@@ -20,10 +21,13 @@ import {
     verifyHarukiApi,
     getTopCharacterId,
     getLeaderCardId,
+    refreshOAuthAccountData,
+    disconnectOAuthAccount,
     SERVER_LABELS,
     type MoesekaiAccount,
     type ServerType,
 } from "@/lib/account";
+import { startOAuthConnect } from "@/lib/oauth";
 
 const SERVER_OPTIONS: { value: ServerType; label: string }[] = [
     { value: "cn", label: "简中服 (CN)" },
@@ -32,6 +36,8 @@ const SERVER_OPTIONS: { value: ServerType; label: string }[] = [
 ];
 
 export default function ProfileClient() {
+    const searchParams = useSearchParams();
+    const oauthStatus = searchParams.get("oauth");
     const [accounts, setAccounts] = useState<MoesekaiAccount[]>([]);
     const [activeId, setActiveId] = useState<string | null>(null);
     const [loaded, setLoaded] = useState(false);
@@ -42,6 +48,7 @@ export default function ProfileClient() {
     const [formServer, setFormServer] = useState<ServerType>("jp");
     const [isVerifying, setIsVerifying] = useState(false);
     const [verifyError, setVerifyError] = useState<string | null>(null);
+    const [oauthMessage, setOauthMessage] = useState<string | null>(null);
 
     // Confirm clear
     const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -60,21 +67,26 @@ export default function ProfileClient() {
             setLoaded(true);
         });
 
+
         // 自动刷新所有账号的数据（uploadTime、名称、头像等）
         const refreshAllAccounts = async () => {
             const accs = getAccounts();
             for (const acc of accs) {
                 console.log(`刷新账号数据: ${acc.gameId} (${acc.server})`);
+
+                if (acc.authSource === "oauth2") {
+                    try {
+                        await refreshOAuthAccountData(acc.id);
+                    } catch {
+                        console.warn(`OAuth2 账号 ${acc.gameId} 刷新失败，保留已有数据并等待重新授权`);
+                    }
+                    continue;
+                }
+
                 const result = await verifyHarukiApi(acc.server, acc.gameId);
 
                 if (!result.success) {
-                    if (!acc.userGamedata) {
-                        // 从未成功获取过数据的旧账号，删除
-                        console.warn(`账号 ${acc.gameId} 刷新失败，删除旧账号`);
-                        removeAccount(acc.id);
-                    } else {
-                        console.warn(`账号 ${acc.gameId} 刷新失败，保留已有数据`);
-                    }
+                    console.warn(`账号 ${acc.gameId} 刷新失败，保留已有数据`);
                 } else {
                     const userGamedata = result.userGamedata || null;
                     const userDecks = result.userDecks || null;
@@ -117,7 +129,7 @@ export default function ProfileClient() {
 
         refreshAllAccounts();
         return () => cancelAnimationFrame(raf);
-    }, [reload]);
+    }, [reload, searchParams]);
 
     const handleAddAccount = useCallback(async () => {
         if (!formGameId.trim()) return;
@@ -190,9 +202,13 @@ export default function ProfileClient() {
     }, []);
 
     const handleDelete = useCallback((id: string) => {
-        removeAccount(id);
-        setDeleteConfirmId(null);
-        reload();
+        void disconnectOAuthAccount(id).catch(() => {
+            // 忽略断开失败，删除本地账号仍应成功
+        }).finally(() => {
+            removeAccount(id);
+            setDeleteConfirmId(null);
+            reload();
+        });
     }, [reload]);
 
     const handleClearAll = useCallback(() => {
@@ -200,6 +216,15 @@ export default function ProfileClient() {
         setShowClearConfirm(false);
         reload();
     }, [reload]);
+    const handleOAuthBind = useCallback(async () => {
+        try {
+            setVerifyError(null);
+            await startOAuthConnect("/profile");
+        } catch (err) {
+            setVerifyError(err instanceof Error ? err.message : "OAuth2 授权初始化失败");
+        }
+    }, []);
+
     const activeAccount = accounts.find((acc) => acc.id === activeId) || null;
     const activeCharacterRanks = new Map((activeAccount?.userCharacters || []).map((c) => [c.characterId, c.characterRank]));
     const activeChallengeStageRanks = new Map<number, number>();
@@ -234,6 +259,12 @@ export default function ProfileClient() {
                     </p>
                 </div>
 
+                {(oauthMessage || oauthStatus === "success") && (
+                    <div className="mb-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                        {oauthMessage || "OAuth2 账号绑定成功，已自动设为当前使用账号。"}
+                    </div>
+                )}
+
                 {/* Accounts List */}
                 <div className="glass-card p-5 sm:p-6 rounded-2xl mb-6">
                     <div className="flex items-center justify-between mb-4">
@@ -244,15 +275,23 @@ export default function ProfileClient() {
                                 <span className="text-xs font-normal text-slate-400 ml-1">({accounts.length})</span>
                             )}
                         </h2>
-                        <button
-                            onClick={() => { setShowAddForm(true); setVerifyError(null); }}
-                            className="px-3 py-1.5 bg-gradient-to-r from-miku to-miku-dark text-white rounded-lg font-bold text-xs shadow-md shadow-miku/20 hover:opacity-90 active:scale-[0.98] transition-all flex items-center gap-1"
-                        >
-                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                            </svg>
-                            添加账号
-                        </button>
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={() => void handleOAuthBind()}
+                                className="px-3 py-1.5 border border-miku/30 text-miku rounded-lg font-bold text-xs hover:bg-miku/5 transition-all"
+                            >
+                                OAuth2 绑定
+                            </button>
+                            <button
+                                onClick={() => { setShowAddForm(true); setVerifyError(null); }}
+                                className="px-3 py-1.5 bg-gradient-to-r from-miku to-miku-dark text-white rounded-lg font-bold text-xs shadow-md shadow-miku/20 hover:opacity-90 active:scale-[0.98] transition-all flex items-center gap-1"
+                            >
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                </svg>
+                                添加账号
+                            </button>
+                        </div>
                     </div>
 
                     {accounts.length === 0 && !showAddForm ? (
@@ -305,6 +344,14 @@ export default function ProfileClient() {
                                                             当前使用
                                                         </span>
                                                     )}
+                                                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${acc.authSource === "oauth2" ? "bg-indigo-100 text-indigo-600" : "bg-slate-100 text-slate-500"}`}>
+                                                        {acc.authSource === "oauth2" ? "OAuth2" : "公开 API"}
+                                                    </span>
+                                                    {acc.authError === "reauth_required" && (
+                                                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-600">
+                                                            需重新授权
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <div className="flex items-center gap-2 mt-0.5">
                                                     <p className="text-[10px] text-slate-400">
@@ -322,13 +369,21 @@ export default function ProfileClient() {
                                             </div>
 
                                             {/* Actions */}
-                                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                                            <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end">
                                                 {!isActive && (
                                                     <button
                                                         onClick={() => handleSetActive(acc.id)}
                                                         className="px-2.5 py-1.5 text-[11px] font-medium text-miku hover:bg-miku/10 rounded-lg transition-colors"
                                                     >
                                                         设为默认
+                                                    </button>
+                                                )}
+                                                {acc.authSource === "oauth2" && (
+                                                    <button
+                                                        onClick={() => void refreshOAuthAccountData(acc.id).then(reload).catch(() => setVerifyError("OAuth2 账号刷新失败，请重新授权后再试"))}
+                                                        className="px-2.5 py-1.5 text-[11px] font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                                                    >
+                                                        重新同步
                                                     </button>
                                                 )}
                                                 {deleteConfirmId === acc.id ? (

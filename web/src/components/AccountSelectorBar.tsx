@@ -12,12 +12,14 @@ import {
     type MoesekaiAccount,
     type ServerType,
 } from "@/lib/account";
+import { startOAuthConnect } from "@/lib/oauth";
 
 interface AccountSelectorBarProps {
     accounts: MoesekaiAccount[];
     activeAccount: MoesekaiAccount | null;
     onSelect: (acc: MoesekaiAccount) => void;
     onAccountAdded: () => void;
+    returnTo?: string;
 }
 
 export default function AccountSelectorBar({
@@ -25,17 +27,20 @@ export default function AccountSelectorBar({
     activeAccount,
     onSelect,
     onAccountAdded,
+    returnTo = "/profile",
 }: AccountSelectorBarProps) {
     const [showAddForm, setShowAddForm] = useState(false);
     const [gameId, setGameId] = useState("");
     const [server, setServer] = useState<ServerType>("jp");
     const [isVerifying, setIsVerifying] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [oauthError, setOauthError] = useState<string | null>(null);
 
     const handleAdd = useCallback(async () => {
         if (!gameId.trim()) return;
         setIsVerifying(true);
         setError(null);
+        setOauthError(null);
 
         const result = await verifyHarukiApi(server, gameId.trim());
         if (!result.success) {
@@ -62,20 +67,37 @@ export default function AccountSelectorBar({
         onAccountAdded();
     }, [gameId, server, onAccountAdded]);
 
+    const handleOAuthBind = useCallback(async () => {
+        try {
+            setOauthError(null);
+            await startOAuthConnect(returnTo);
+        } catch (err) {
+            setOauthError(err instanceof Error ? err.message : "OAuth2 授权初始化失败");
+        }
+    }, [returnTo]);
+
     return (
         <div className="mb-6">
             <div className="glass-card p-4 rounded-2xl">
                 <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold text-slate-600">选择账号</span>
-                    <button
-                        onClick={() => { setShowAddForm(!showAddForm); setError(null); }}
-                        className="text-xs font-medium text-miku hover:text-miku-dark transition-colors flex items-center gap-0.5"
-                    >
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                        </svg>
-                        添加账号
-                    </button>
+                    <div className="flex items-center gap-3">
+                        <button
+                            onClick={() => void handleOAuthBind()}
+                            className="text-xs font-medium text-miku hover:text-miku-dark transition-colors"
+                        >
+                            OAuth2 绑定
+                        </button>
+                        <button
+                            onClick={() => { setShowAddForm(!showAddForm); setError(null); setOauthError(null); }}
+                            className="text-xs font-medium text-miku hover:text-miku-dark transition-colors flex items-center gap-0.5"
+                        >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            </svg>
+                            添加账号
+                        </button>
+                    </div>
                 </div>
                 <div className="flex gap-2 flex-wrap">
                     {accounts.map((acc) => {
@@ -159,12 +181,12 @@ export default function AccountSelectorBar({
                                 取消
                             </button>
                         </div>
-                        {error && (
-                            <p className="mt-2 text-[11px] text-red-500 flex items-center gap-1">
+                        {(error || oauthError) && (
+                            <p className="mt-2 text-[11px] text-red-500 flex items-center gap-1 flex-wrap">
                                 <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01" />
                                 </svg>
-                                {error}
+                                {error || oauthError}
                                 <ExternalLink href="https://haruki.seiunx.com" className="text-miku hover:underline ml-1">
                                     前往 Haruki →
                                 </ExternalLink>

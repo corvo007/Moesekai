@@ -23,9 +23,16 @@ import {
     getAccounts,
     getActiveAccount,
     setActiveAccount,
+    createAccount,
+    getTopCharacterId,
+    fetchAccountGameData,
+    normalizeAccountDataError,
+    type AccountDataErrorCode,
     type MoesekaiAccount,
     type ServerType,
 } from "@/lib/account";
+
+
 import AccountSelectorBar from "@/components/AccountSelectorBar";
 import QuickBindForm from "@/components/QuickBindForm";
 import { useScrollRestore } from "@/hooks/useScrollRestore";
@@ -88,6 +95,22 @@ function formatUploadTime(uploadTime: string | number): string {
     return `${month}-${day} ${hour}:${minute}`;
 }
 
+function getUserErrorMessage(code: AccountDataErrorCode): string {
+    switch (code) {
+        case "API_NOT_PUBLIC":
+            return "当前账号的公开 API 未开启，且 OAuth2 数据读取也不可用。请前往 Haruki 开启公开 API，或重新进行 OAuth2 授权。";
+        case "NOT_FOUND":
+            return "用户数据未找到，请确认 UID、服务器是否正确，并已在 Haruki 上传数据。";
+        case "OAUTH_REAUTH_REQUIRED":
+            return "当前 OAuth2 授权已过期，请重新授权；如果该账号已开启公开 API，可刷新页面后重试。";
+        case "OAUTH_ACCESS_FAILED":
+            return "OAuth2 数据读取失败，且无法回退到公开 API。请重新授权或稍后再试。";
+        case "NETWORK_ERROR":
+        default:
+            return "网络异常，请稍后重试。";
+    }
+}
+
 // ==================== Main Component ====================
 
 function MyCardsContent() {
@@ -105,7 +128,7 @@ function MyCardsContent() {
     const [isLoading, setIsLoading] = useState(true);
     const [isFetchingUser, setIsFetchingUser] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [userError, setUserError] = useState<string | null>(null);
+    const [userError, setUserError] = useState<AccountDataErrorCode | null>(null);
     const [isTwFallback, setIsTwFallback] = useState(false);
     const [uploadTime, setUploadTime] = useState<string | number | null>(null);
     const [filtersInitialized, setFiltersInitialized] = useState(false);
@@ -318,28 +341,8 @@ function MyCardsContent() {
             setIsFetchingUser(true);
             setUserError(null);
 
-            const { server, gameId } = activeAccount!;
-            const url = `https://suite-api.haruki.seiunx.com/public/${server}/suite/${gameId}?key=userCards,upload_time`;
-
             try {
-                const res = await fetch(url);
-                if (res.status === 403) {
-                    setUserError("API_NOT_PUBLIC");
-                    if (!cancelled) setIsFetchingUser(false);
-                    return;
-                }
-                if (res.status === 404) {
-                    setUserError("NOT_FOUND");
-                    if (!cancelled) setIsFetchingUser(false);
-                    return;
-                }
-                if (!res.ok) {
-                    setUserError("NETWORK_ERROR");
-                    if (!cancelled) setIsFetchingUser(false);
-                    return;
-                }
-
-                const data = await res.json();
+                const data = await fetchAccountGameData(activeAccount!, ["userCards", "upload_time"]);
                 // API may return { userCards: [...] } or just [...] directly
                 let cards: UserCard[];
                 if (Array.isArray(data)) {
@@ -352,7 +355,7 @@ function MyCardsContent() {
                     cards = (arrayProp as UserCard[]) || [];
                 }
                 // Extract upload_time
-                if (data.upload_time) {
+                if (typeof data.upload_time === "number" || typeof data.upload_time === "string") {
                     setUploadTime(data.upload_time);
                 } else {
                     setUploadTime(null);
@@ -362,8 +365,8 @@ function MyCardsContent() {
                 cards.forEach((c) => map.set(c.cardId, c));
 
                 if (!cancelled) setUserCards(map);
-            } catch {
-                if (!cancelled) setUserError("NETWORK_ERROR");
+            } catch (error) {
+                if (!cancelled) setUserError(normalizeAccountDataError(error));
             } finally {
                 if (!cancelled) setIsFetchingUser(false);
             }
@@ -548,15 +551,13 @@ function MyCardsContent() {
                 <QuickBindForm
                     onAccountAdded={() => {
                         setAccountsList(getAccounts());
-                        setActiveAcc(getActiveAccount());
+                        const active = getActiveAccount();
+                        setActiveAcc(active);
                     }}
-                    icon={
-                        <svg className="w-8 h-8 text-miku" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
-                        </svg>
-                    }
-                    description="输入游戏UID即可查看卡牌收集进度"
+                    description="绑定账号后即可查看你的卡牌收集进度"
+                    returnTo="/my-cards"
                 />
+
             </div>
         );
     }
@@ -572,9 +573,12 @@ function MyCardsContent() {
                 onSelect={handleAccountSelect}
                 onAccountAdded={() => {
                     setAccountsList(getAccounts());
-                    setActiveAcc(getActiveAccount());
+                    const active = getActiveAccount();
+                    setActiveAcc(active);
                 }}
+                returnTo="/my-cards"
             />
+
 
             {/* TW Warning */}
             {activeAccount?.server === "tw" && (
@@ -595,11 +599,7 @@ function MyCardsContent() {
                         </svg>
                         <div>
                             <p className="text-xs font-medium text-red-700">
-                                {userError === "API_NOT_PUBLIC"
-                                    ? "该用户的公开API未开启，请先前往 Haruki 工具箱勾选「公开API访问」"
-                                    : userError === "NOT_FOUND"
-                                        ? "用户数据未找到，请确认已在 Haruki 上传数据"
-                                        : "网络错误，请稍后重试"}
+                                {getUserErrorMessage(userError)}
                             </p>
                             <ExternalLink
                                 href="https://haruki.seiunx.com"

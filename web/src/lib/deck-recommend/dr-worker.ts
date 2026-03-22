@@ -35,6 +35,7 @@ const MASTER_DATA_BASES: Record<string, string> = {
 
 // Haruki suite API base
 const HARUKI_SUITE_API = "https://suite-api.haruki.seiunx.com/public";
+const OAUTH2_BASE = (process.env.NEXT_PUBLIC_OAUTH2_BASE_URL || "https://toolbox-api-direct.haruki.seiunx.com/api/oauth2").replace(/\/+$/, "");
 
 // User data keys needed for deck recommendation
 const USER_DATA_KEYS = [
@@ -159,15 +160,16 @@ class SnowyDataProvider implements DataProvider {
 
     constructor(
         private userId: string,
-        private server: HarukiServer = "jp"
+        private server: HarukiServer = "jp",
+        private oauthAccessToken: string | null = null,
     ) {
         if (!["jp", "cn", "tw"].includes(server)) {
             throw new Error(`Unsupported server: ${server}. Only JP, CN, and TW are supported.`);
         }
     }
 
-    public static getCachedInstance(userId: string, server: HarukiServer = "jp"): CachedDataProvider {
-        return new CachedDataProvider(new SnowyDataProvider(userId, server));
+    public static getCachedInstance(userId: string, server: HarukiServer = "jp", oauthAccessToken: string | null = null): CachedDataProvider {
+        return new CachedDataProvider(new SnowyDataProvider(userId, server, oauthAccessToken));
     }
 
     private async fetchMasterJson(base: string, key: string): Promise<unknown[] | null> {
@@ -217,23 +219,52 @@ class SnowyDataProvider implements DataProvider {
     async getUserDataAll(): Promise<UserDataMap> {
         if (this.userDataCache) return this.userDataCache;
 
-        const url = `${HARUKI_SUITE_API}/${this.server}/suite/${this.userId}?key=${USER_DATA_KEYS}`;
-        const response = await fetch(url);
-
-        if (response.status === 404) {
-            throw new Error("USER_NOT_FOUND");
-        }
-        if (response.status === 403) {
-            throw new Error("API_NOT_PUBLIC");
-        }
-        if (!response.ok) {
-            throw new Error(`Failed to fetch user data (${response.status})`);
-        }
-
-        const data = (await response.json()) as UserDataMap & {
+        let data: UserDataMap & {
             userCards?: UserCardEntry[];
             userHonors?: UserHonorEntry[];
         };
+
+        if (this.oauthAccessToken) {
+            const keys = USER_DATA_KEYS.split(",");
+            const responses = await Promise.all(keys.map(async (key) => {
+                const response = await fetch(`${OAUTH2_BASE}/game-data/${this.server}/${key}/${this.userId}`, {
+                    headers: {
+                        Authorization: `Bearer ${this.oauthAccessToken}`,
+                    },
+                });
+                if (response.status === 404) {
+                    throw new Error("USER_NOT_FOUND");
+                }
+                if (response.status === 403) {
+                    throw new Error("API_NOT_PUBLIC");
+                }
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch user data (${response.status})`);
+                }
+                return [key, await response.json()] as const;
+            }));
+            data = Object.fromEntries(responses) as UserDataMap & {
+                userCards?: UserCardEntry[];
+                userHonors?: UserHonorEntry[];
+            };
+        } else {
+            const response = await fetch(`${HARUKI_SUITE_API}/${this.server}/suite/${this.userId}?key=${USER_DATA_KEYS}`);
+
+            if (response.status === 404) {
+                throw new Error("USER_NOT_FOUND");
+            }
+            if (response.status === 403) {
+                throw new Error("API_NOT_PUBLIC");
+            }
+            if (!response.ok) {
+                throw new Error(`Failed to fetch user data (${response.status})`);
+            }
+
+            data = (await response.json()) as UserDataMap & {
+                userCards?: UserCardEntry[];
+                userHonors?: UserHonorEntry[];
+            };
+        }
 
         // Filter userCards to ensure only cards existing in JP master data are returned
         if (data.userCards && Array.isArray(data.userCards)) {
@@ -274,6 +305,7 @@ export interface WorkerInput {
     mode: "challenge" | "event" | "mysekai" | "custom" | "strongest";
     userId: string;
     server: string;
+    oauthAccessToken?: string;
     musicId: number;
     difficulty: string;
     // Challenge mode
@@ -328,7 +360,7 @@ function parseLiveType(liveTypeStr?: string): LiveType {
 
 async function deckRecommendRunner(args: WorkerInput): Promise<WorkerOutput> {
     const {
-        mode, userId, server, musicId, difficulty,
+        mode, userId, server, oauthAccessToken, musicId, difficulty,
         characterId, cardConfig,
         eventId, liveType: liveTypeStr, supportCharacterId,
         leaderCharacter, strongestTarget,
@@ -337,7 +369,7 @@ async function deckRecommendRunner(args: WorkerInput): Promise<WorkerOutput> {
     sendProgress("fetching", 5, "正在获取用户数据...");
 
     const dataProvider = new CachedDataProvider(
-        new SnowyDataProvider(userId, server as HarukiServer)
+        new SnowyDataProvider(userId, server as HarukiServer, oauthAccessToken || null)
     );
 
     // Parallel preload all data for speed

@@ -28,6 +28,7 @@ export const MASTER_DATA_BASES: Record<string, string> = {
 
 // Haruki suite API base
 export const HARUKI_SUITE_API = "https://suite-api.haruki.seiunx.com/public";
+const OAUTH2_BASE = (process.env.NEXT_PUBLIC_OAUTH2_BASE_URL || "https://toolbox-api-direct.haruki.seiunx.com/api/oauth2").replace(/\/+$/, "");
 
 // User data keys needed for deck recommendation
 export const USER_DATA_KEYS = [
@@ -128,15 +129,16 @@ export class SnowyDataProvider implements DataProvider {
 
     constructor(
         private userId: string,
-        private server: HarukiServer = "jp"
+        private server: HarukiServer = "jp",
+        private oauthAccessToken: string | null = null,
     ) {
         if (!["jp", "cn", "tw"].includes(server)) {
             throw new Error(`Unsupported server: ${server}. Only JP, CN, and TW are supported.`);
         }
     }
 
-    public static getCachedInstance(userId: string, server: HarukiServer = "jp"): CachedDataProvider {
-        return new CachedDataProvider(new SnowyDataProvider(userId, server));
+    public static getCachedInstance(userId: string, server: HarukiServer = "jp", oauthAccessToken: string | null = null): CachedDataProvider {
+        return new CachedDataProvider(new SnowyDataProvider(userId, server, oauthAccessToken));
     }
 
     private async fetchMasterJson(base: string, key: string): Promise<unknown[] | null> {
@@ -186,8 +188,13 @@ export class SnowyDataProvider implements DataProvider {
     async getUserDataAll(): Promise<UserDataMap> {
         if (this.userDataCache) return this.userDataCache;
 
-        const url = `${HARUKI_SUITE_API}/${this.server}/suite/${this.userId}?key=${USER_DATA_KEYS}`;
-        const response = await fetch(url);
+        const response = this.oauthAccessToken
+            ? await fetch(`${OAUTH2_BASE}/game-data/${this.server}/suite/${this.userId}`, {
+                headers: {
+                    Authorization: `Bearer ${this.oauthAccessToken}`,
+                },
+            })
+            : await fetch(`${HARUKI_SUITE_API}/${this.server}/suite/${this.userId}?key=${USER_DATA_KEYS}`);
 
         if (response.status === 404) {
             throw new Error("USER_NOT_FOUND");

@@ -6,7 +6,7 @@ import Link from "next/link";
 import { IMusicInfo, IMusicMeta } from "@/types/music";
 import { CHAR_NAMES, ATTR_ICON_PATHS, type ICardInfo } from "@/types/types";
 import { fetchMasterData } from "@/lib/fetch";
-import { saveToolState, getAccount, SERVER_OPTIONS } from "@/lib/account";
+import { saveToolState, getAccount, getOAuthAccessTokenForGameUser, SERVER_OPTIONS } from "@/lib/account";
 import AccountSelector from "@/components/AccountSelector";
 import MainLayout from "@/components/MainLayout";
 import ExternalLink from "@/components/ExternalLink";
@@ -551,10 +551,12 @@ export default function ScoreControlClient() {
                     }
                 };
 
+                const oauthAccessToken = getOAuthAccessTokenForGameUser(dbServer, dbUserId.trim());
                 w.postMessage({
                     args: {
                         userId: dbUserId.trim(),
                         server: dbServer,
+                        oauthAccessToken,
                         eventId: parseInt(dbEventId),
                         minBonus: chunk.min,
                         maxBonus: chunk.max,
@@ -717,10 +719,12 @@ export default function ScoreControlClient() {
                     totalChecked++;
                     resolve();
                 };
+                const oauthAccessToken = getOAuthAccessTokenForGameUser(dbServer, dbUserId.trim());
                 w.postMessage({
                     args: {
                         userId: dbUserId.trim(),
                         server: dbServer,
+                        oauthAccessToken,
                         eventId: parseInt(dbEventId),
                         minBonus: bonusMin,
                         maxBonus: bonusMax,

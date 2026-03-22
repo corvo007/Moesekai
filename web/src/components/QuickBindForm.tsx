@@ -9,6 +9,7 @@ import {
     SERVER_OPTIONS,
     type ServerType,
 } from "@/lib/account";
+import { startOAuthConnect } from "@/lib/oauth";
 
 interface QuickBindFormProps {
     onAccountAdded: () => void;
@@ -16,6 +17,8 @@ interface QuickBindFormProps {
     icon?: React.ReactNode;
     /** 自定义描述文字 */
     description?: string;
+    /** OAuth 成功后的回跳页面 */
+    returnTo?: string;
 }
 
 const DefaultIcon = () => (
@@ -28,8 +31,10 @@ export default function QuickBindForm({
     onAccountAdded,
     icon,
     description = "输入游戏UID即可开始使用",
+    returnTo = "/profile",
 }: QuickBindFormProps) {
     const [gameId, setGameId] = useState("");
+    const [oauthError, setOauthError] = useState<string | null>(null);
     const [server, setServer] = useState<ServerType>("jp");
     const [isVerifying, setIsVerifying] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -38,6 +43,7 @@ export default function QuickBindForm({
         if (!gameId.trim()) return;
         setIsVerifying(true);
         setError(null);
+        setOauthError(null);
 
         const result = await verifyHarukiApi(server, gameId.trim());
         if (!result.success) {
@@ -62,6 +68,15 @@ export default function QuickBindForm({
         setError(null);
         onAccountAdded();
     }, [gameId, server, onAccountAdded]);
+
+    const handleOAuthBind = useCallback(async () => {
+        try {
+            setOauthError(null);
+            await startOAuthConnect(returnTo);
+        } catch (err) {
+            setOauthError(err instanceof Error ? err.message : "OAuth2 授权初始化失败");
+        }
+    }, [returnTo]);
 
     return (
         <div className="glass-card p-6 sm:p-8 rounded-2xl">
@@ -107,14 +122,14 @@ export default function QuickBindForm({
                     </div>
                 </div>
 
-                {error && (
+                {(error || oauthError) && (
                     <div className="p-3 rounded-xl bg-red-50 border border-red-200/50">
                         <div className="flex items-start gap-2">
                             <svg className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
                             <div>
-                                <p className="text-xs font-medium text-red-700">{error}</p>
+                                <p className="text-xs font-medium text-red-700">{error || oauthError}</p>
                                 <ExternalLink href="https://haruki.seiunx.com" className="text-xs text-miku hover:underline mt-1 inline-block">
                                     前往 Haruki 工具箱 →
                                 </ExternalLink>
@@ -123,27 +138,36 @@ export default function QuickBindForm({
                     </div>
                 )}
 
-                <button
-                    onClick={handleSubmit}
-                    disabled={!gameId.trim() || isVerifying}
-                    className="w-full px-6 py-3 bg-gradient-to-r from-miku to-miku-dark text-white rounded-xl font-bold text-sm shadow-lg shadow-miku/20 hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                    {isVerifying ? (
-                        <>
-                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                            验证中...
-                        </>
-                    ) : (
-                        "验证并绑定"
-                    )}
-                </button>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                        onClick={handleSubmit}
+                        disabled={!gameId.trim() || isVerifying}
+                        className="w-full px-6 py-3 bg-gradient-to-r from-miku to-miku-dark text-white rounded-xl font-bold text-sm shadow-lg shadow-miku/20 hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                        {isVerifying ? (
+                            <>
+                                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                验证中...
+                            </>
+                        ) : (
+                            "验证并绑定"
+                        )}
+                    </button>
+                    <button
+                        onClick={() => void handleOAuthBind()}
+                        disabled={isVerifying}
+                        className="w-full px-6 py-3 border border-miku/30 text-miku rounded-xl font-bold text-sm hover:bg-miku/5 transition-all disabled:opacity-50"
+                    >
+                        OAuth2 授权绑定
+                    </button>
+                </div>
 
                 <p className="text-[10px] text-slate-400 text-center">
-                    需要先在{" "}
+                    手动 UID 绑定需要先在{" "}
                     <ExternalLink href="https://haruki.seiunx.com" className="text-miku hover:underline">
                         Haruki 工具箱
                     </ExternalLink>
-                    {" "}上传数据并开启公开API
+                    {" "}上传数据并开启公开 API；OAuth2 授权绑定则不依赖公开 API 开启。
                 </p>
             </div>
         </div>

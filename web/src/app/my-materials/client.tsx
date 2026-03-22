@@ -8,9 +8,16 @@ import {
     getAccounts,
     getActiveAccount,
     setActiveAccount,
+    createAccount,
+    getTopCharacterId,
+    fetchAccountGameData,
+    normalizeAccountDataError,
+    SERVER_OPTIONS,
+    type AccountDataErrorCode,
     type MoesekaiAccount,
     type ServerType,
 } from "@/lib/account";
+
 import { fetchMasterDataForServer } from "@/lib/fetch";
 import { getMaterialThumbnailUrl, getMysekaiMaterialThumbnailUrl } from "@/lib/assets";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -95,6 +102,22 @@ function getAssetSourceForServer(server: ServerType, assetSource: AssetSourceTyp
     return assetSource;
 }
 
+function getUserErrorMessage(code: AccountDataErrorCode): string {
+    switch (code) {
+        case "API_NOT_PUBLIC":
+            return "当前账号的公开 API 未开启，且 OAuth2 数据读取也不可用。请前往 Haruki 开启公开 API，或重新进行 OAuth2 授权。";
+        case "NOT_FOUND":
+            return "用户数据未找到，请确认 UID、服务器是否正确，并已在 Haruki 上传数据。";
+        case "OAUTH_REAUTH_REQUIRED":
+            return "当前 OAuth2 授权已过期，请重新授权；如果该账号已开启公开 API，可刷新页面后重试。";
+        case "OAUTH_ACCESS_FAILED":
+            return "OAuth2 数据读取失败，且无法回退到公开 API。请重新授权或稍后再试。";
+        case "NETWORK_ERROR":
+        default:
+            return "网络异常，请稍后重试。";
+    }
+}
+
 // ==================== Main Component ====================
 
 function MyMaterialsContent() {
@@ -112,7 +135,7 @@ function MyMaterialsContent() {
     const [isLoading, setIsLoading] = useState(true);
     const [isFetchingUser, setIsFetchingUser] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [userError, setUserError] = useState<string | null>(null);
+    const [userError, setUserError] = useState<AccountDataErrorCode | null>(null);
     const [uploadTime, setUploadTime] = useState<string | number | null>(null);
 
     // UI state
@@ -195,36 +218,16 @@ function MyMaterialsContent() {
             setIsFetchingUser(true);
             setUserError(null);
 
-            const { server, gameId } = activeAccount!;
-            const url = `https://suite-api.haruki.seiunx.com/public/${server}/suite/${gameId}?key=userMaterials,userMysekaiMaterials,upload_time`;
-
             try {
-                const res = await fetch(url);
-                if (res.status === 403) {
-                    setUserError("API_NOT_PUBLIC");
-                    if (!cancelled) setIsFetchingUser(false);
-                    return;
-                }
-                if (res.status === 404) {
-                    setUserError("NOT_FOUND");
-                    if (!cancelled) setIsFetchingUser(false);
-                    return;
-                }
-                if (!res.ok) {
-                    setUserError("NETWORK_ERROR");
-                    if (!cancelled) setIsFetchingUser(false);
-                    return;
-                }
-
-                const data = await res.json();
+                const data = await fetchAccountGameData(activeAccount!, ["userMaterials", "userMysekaiMaterials", "upload_time"]);
 
                 if (!cancelled) {
-                    setUserMaterials(data.userMaterials || []);
-                    setUserMysekaiMaterials(data.userMysekaiMaterials || []);
-                    setUploadTime(data.upload_time || null);
+                    setUserMaterials(Array.isArray(data.userMaterials) ? data.userMaterials as UserMaterialRaw[] : []);
+                    setUserMysekaiMaterials(Array.isArray(data.userMysekaiMaterials) ? data.userMysekaiMaterials as UserMysekaiMaterialRaw[] : []);
+                    setUploadTime(typeof data.upload_time === "number" || typeof data.upload_time === "string" ? data.upload_time : null);
                 }
-            } catch {
-                if (!cancelled) setUserError("NETWORK_ERROR");
+            } catch (error) {
+                if (!cancelled) setUserError(normalizeAccountDataError(error));
             } finally {
                 if (!cancelled) setIsFetchingUser(false);
             }
@@ -389,15 +392,13 @@ function MyMaterialsContent() {
                 <QuickBindForm
                     onAccountAdded={() => {
                         setAccountsList(getAccounts());
-                        setActiveAcc(getActiveAccount());
+                        const active = getActiveAccount();
+                        setActiveAcc(active);
                     }}
-                    icon={
-                        <svg className="w-8 h-8 text-miku" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                        </svg>
-                    }
-                    description="输入游戏UID即可查看拥有的资源与材料"
+                    description="绑定账号后即可查看你的材料库存"
+                    returnTo="/my-materials"
                 />
+
             </div>
         );
     }
@@ -412,9 +413,12 @@ function MyMaterialsContent() {
                 onSelect={handleAccountSelect}
                 onAccountAdded={() => {
                     setAccountsList(getAccounts());
-                    setActiveAcc(getActiveAccount());
+                    const active = getActiveAccount();
+                    setActiveAcc(active);
                 }}
+                returnTo="/my-materials"
             />
+
 
             {/* TW Warning */}
             {activeAccount?.server === "tw" && (
@@ -435,11 +439,7 @@ function MyMaterialsContent() {
                         </svg>
                         <div>
                             <p className="text-xs font-medium text-red-700">
-                                {userError === "API_NOT_PUBLIC"
-                                    ? "该用户的公开API未开启，请先前往 Haruki 工具箱勾选「公开API访问」"
-                                    : userError === "NOT_FOUND"
-                                        ? "用户数据未找到，请确认已在 Haruki 上传数据"
-                                        : "网络错误，请稍后重试"}
+                                {getUserErrorMessage(userError)}
                             </p>
                             <ExternalLink
                                 href="https://haruki.seiunx.com"
