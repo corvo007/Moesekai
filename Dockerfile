@@ -9,6 +9,8 @@ COPY web/ web/
 WORKDIR /app/web
 # Set API URL empty to allow relative fetching
 ENV NEXT_PUBLIC_API_URL=
+# OAuth2 client ID (baked into client JS at build time)
+ENV NEXT_PUBLIC_OAUTH2_CLIENT_ID=snowy-viewer-public
 RUN pnpm install --frozen-lockfile
 RUN ls -la /app/refer/re_sekai-calculator/src/index.ts
 RUN pnpm run build
