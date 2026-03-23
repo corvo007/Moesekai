@@ -383,14 +383,18 @@ export async function fetchOAuthBindings(accessToken: string): Promise<OAuthBind
         const maybeItems = (data as {
             bindings?: unknown;
             items?: unknown;
-            data?: { bindings?: unknown; items?: unknown };
-            result?: { bindings?: unknown; items?: unknown };
+            updatedData?: unknown;
+            data?: { bindings?: unknown; items?: unknown; updatedData?: unknown };
+            result?: { bindings?: unknown; items?: unknown; updatedData?: unknown };
         }).bindings
             || (data as { items?: unknown }).items
-            || (data as { data?: { bindings?: unknown; items?: unknown } }).data?.bindings
-            || (data as { data?: { bindings?: unknown; items?: unknown } }).data?.items
-            || (data as { result?: { bindings?: unknown; items?: unknown } }).result?.bindings
-            || (data as { result?: { bindings?: unknown; items?: unknown } }).result?.items;
+            || (data as { updatedData?: unknown }).updatedData
+            || (data as { data?: { bindings?: unknown; items?: unknown; updatedData?: unknown } }).data?.bindings
+            || (data as { data?: { bindings?: unknown; items?: unknown; updatedData?: unknown } }).data?.items
+            || (data as { data?: { bindings?: unknown; items?: unknown; updatedData?: unknown } }).data?.updatedData
+            || (data as { result?: { bindings?: unknown; items?: unknown; updatedData?: unknown } }).result?.bindings
+            || (data as { result?: { bindings?: unknown; items?: unknown; updatedData?: unknown } }).result?.items
+            || (data as { result?: { bindings?: unknown; items?: unknown; updatedData?: unknown } }).result?.updatedData;
         if (Array.isArray(maybeItems)) return maybeItems as OAuthBinding[];
         console.warn("[OAuth2] unexpected bindings payload", data);
     }
