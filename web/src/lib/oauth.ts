@@ -108,18 +108,34 @@ async function sha256Base64Url(value: string): Promise<string> {
     return toBase64Url(digest);
 }
 
+function isOAuthPendingState(value: unknown): value is OAuthPendingState {
+    return !!value
+        && typeof value === "object"
+        && !Array.isArray(value)
+        && typeof (value as OAuthPendingState).state === "string"
+        && typeof (value as OAuthPendingState).codeVerifier === "string"
+        && typeof (value as OAuthPendingState).returnTo === "string"
+        && typeof (value as OAuthPendingState).createdAt === "number";
+}
+
 function readPendingOAuthStateMap(): Record<string, OAuthPendingState> {
     if (typeof window === "undefined") return {};
     const raw = sessionStorage.getItem(OAUTH_PENDING_KEY);
     if (!raw) return {};
 
     try {
-        const parsed = JSON.parse(raw) as Record<string, OAuthPendingState>;
+        const parsed = JSON.parse(raw) as unknown;
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
             clearPendingOAuthState();
             return {};
         }
-        return parsed;
+
+        if (isOAuthPendingState(parsed)) {
+            return { [parsed.state]: parsed };
+        }
+
+        const entries = Object.entries(parsed).filter(([, value]) => isOAuthPendingState(value));
+        return Object.fromEntries(entries) as Record<string, OAuthPendingState>;
     } catch {
         clearPendingOAuthState();
         return {};
