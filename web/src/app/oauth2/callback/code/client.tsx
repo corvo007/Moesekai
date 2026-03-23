@@ -63,18 +63,18 @@ export default function CallbackClient() {
     const code = searchParams.get("code");
     const state = searchParams.get("state");
     const oauthError = searchParams.get("error");
-    const returnTo = useMemo(() => getOAuthReturnTo(), []);
+    const returnTo = useMemo(() => getOAuthReturnTo(state), [state]);
 
     useEffect(() => {
         let cancelled = false;
         if (oauthError) {
-            clearPendingOAuthState();
+            clearPendingOAuthState(state);
             setError(formatOAuthErrorMessage(oauthError));
             setLoading(false);
             return;
         }
         if (!code || !state) {
-            clearPendingOAuthState();
+            clearPendingOAuthState(state);
             setError(formatOAuthErrorMessage("OAuth2 回调参数不完整"));
             setLoading(false);
             return;
@@ -94,12 +94,12 @@ export default function CallbackClient() {
                     setPhase("selecting_binding");
                     setLoading(false);
                 } else {
-                    clearPendingOAuthState();
+                    clearPendingOAuthState(state);
                     setError("当前授权未返回任何可用绑定，请确认 Haruki 账号已绑定并验证对应游戏账号。");
                     setLoading(false);
                 }
             } catch (err) {
-                clearPendingOAuthState();
+                clearPendingOAuthState(state);
                 console.error("[OAuth2] callback resolve failed", err);
                 if (!cancelled) {
                     setError(formatOAuthErrorMessage(err instanceof Error ? err.message : "OAuth2 处理失败"));
@@ -137,12 +137,12 @@ export default function CallbackClient() {
                 tokenSet: source.tokenSet,
             });
             const redirectUrl = buildSuccessReturnUrl(returnTo, account.id);
-            clearPendingOAuthState();
+            clearPendingOAuthState(state);
             setPhase("redirecting");
             console.info("[OAuth2] redirecting to", redirectUrl);
             window.location.replace(redirectUrl);
         } catch (err) {
-            clearPendingOAuthState();
+            clearPendingOAuthState(state);
             console.error("[OAuth2] save account failed", err);
             setError(formatOAuthErrorMessage(err instanceof Error ? err.message : "同步授权账号数据失败"));
             setLoading(false);

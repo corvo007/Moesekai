@@ -108,6 +108,41 @@ async function sha256Base64Url(value: string): Promise<string> {
     return toBase64Url(digest);
 }
 
+function readPendingOAuthStateMap(): Record<string, OAuthPendingState> {
+    if (typeof window === "undefined") return {};
+    const raw = sessionStorage.getItem(OAUTH_PENDING_KEY);
+    if (!raw) return {};
+
+    try {
+        const parsed = JSON.parse(raw) as Record<string, OAuthPendingState>;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            clearPendingOAuthState();
+            return {};
+        }
+        return parsed;
+    } catch {
+        clearPendingOAuthState();
+        return {};
+    }
+}
+
+function writePendingOAuthStateMap(map: Record<string, OAuthPendingState>): void {
+    if (typeof window === "undefined") return;
+    const entries = Object.entries(map);
+    if (entries.length === 0) {
+        sessionStorage.removeItem(OAUTH_PENDING_KEY);
+        return;
+    }
+    sessionStorage.setItem(OAUTH_PENDING_KEY, JSON.stringify(Object.fromEntries(entries)));
+}
+
+function prunePendingOAuthStates(map: Record<string, OAuthPendingState>): Record<string, OAuthPendingState> {
+    const now = Date.now();
+    return Object.fromEntries(
+        Object.entries(map).filter(([, pending]) => pending?.createdAt && now - pending.createdAt <= OAUTH_PENDING_TTL_MS),
+    );
+}
+
 export async function startOAuthConnect(returnTo = "/profile"): Promise<void> {
     if (typeof window === "undefined") return;
     const config = assertOAuthConfig();
@@ -121,7 +156,9 @@ export async function startOAuthConnect(returnTo = "/profile"): Promise<void> {
         returnTo,
         createdAt: Date.now(),
     };
-    sessionStorage.setItem(OAUTH_PENDING_KEY, JSON.stringify(pending));
+    const nextPendingMap = prunePendingOAuthStates(readPendingOAuthStateMap());
+    nextPendingMap[state] = pending;
+    writePendingOAuthStateMap(nextPendingMap);
 
     const authorizeUrl = new URL(`${config.baseUrl}/authorize`);
     authorizeUrl.searchParams.set("response_type", "code");
@@ -135,30 +172,33 @@ export async function startOAuthConnect(returnTo = "/profile"): Promise<void> {
     window.location.href = authorizeUrl.toString();
 }
 
-export function getPendingOAuthState(): OAuthPendingState | null {
+export function getPendingOAuthState(state?: string | null): OAuthPendingState | null {
     if (typeof window === "undefined") return null;
-    const raw = sessionStorage.getItem(OAUTH_PENDING_KEY);
-    if (!raw) return null;
-    try {
-        const parsed = JSON.parse(raw) as OAuthPendingState;
-        if (!parsed.createdAt || Date.now() - parsed.createdAt > OAUTH_PENDING_TTL_MS) {
-            clearPendingOAuthState();
-            return null;
-        }
-        return parsed;
-    } catch {
-        clearPendingOAuthState();
-        return null;
+    const pendingMap = prunePendingOAuthStates(readPendingOAuthStateMap());
+    writePendingOAuthStateMap(pendingMap);
+
+    if (state) {
+        return pendingMap[state] || null;
     }
+
+    const latest = Object.values(pendingMap).sort((a, b) => b.createdAt - a.createdAt)[0];
+    return latest || null;
 }
 
-export function clearPendingOAuthState(): void {
+export function clearPendingOAuthState(state?: string | null): void {
     if (typeof window === "undefined") return;
-    sessionStorage.removeItem(OAUTH_PENDING_KEY);
+    if (!state) {
+        sessionStorage.removeItem(OAUTH_PENDING_KEY);
+        return;
+    }
+
+    const pendingMap = readPendingOAuthStateMap();
+    delete pendingMap[state];
+    writePendingOAuthStateMap(pendingMap);
 }
 
-export function getOAuthReturnTo(): string {
-    return getPendingOAuthState()?.returnTo || "/profile";
+export function getOAuthReturnTo(state?: string | null): string {
+    return getPendingOAuthState(state)?.returnTo || "/profile";
 }
 
 export function formatOAuthErrorMessage(error: string): string {
@@ -364,16 +404,16 @@ export async function resolveOAuthAuthorization(
     onPhaseChange?: (phase: OAuthAuthorizationPhase) => void,
 ): Promise<OAuthAuthorizationResult> {
     reportOAuthPhase("validating_state", onPhaseChange);
-    const pending = getPendingOAuthState();
+    const pending = getPendingOAuthState(state);
     if (!pending) {
         throw new Error("OAUTH_PENDING_MISSING");
     }
     if (Date.now() - pending.createdAt > OAUTH_PENDING_TTL_MS) {
-        clearPendingOAuthState();
+        clearPendingOAuthState(state);
         throw new Error("OAUTH_PENDING_MISSING");
     }
     if (pending.state !== state) {
-        clearPendingOAuthState();
+        clearPendingOAuthState(state);
         throw new Error("OAUTH_STATE_MISMATCH");
     }
 
