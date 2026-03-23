@@ -5,7 +5,7 @@ import MainLayout from "@/components/MainLayout";
 import GachaGrid from "@/components/gacha/GachaGrid";
 import GachaFilters from "@/components/gacha/GachaFilters";
 import { useTheme } from "@/contexts/ThemeContext";
-import { IGachaInfo } from "@/types/types";
+import { IGachaInfo, ICardInfo, GachaCategoryType, isWishGacha } from "@/types/types";
 import { fetchMasterData } from "@/lib/fetch";
 import { loadTranslations, TranslationData } from "@/lib/translations";
 import { useScrollRestore } from "@/hooks/useScrollRestore";
@@ -17,6 +17,7 @@ function GachaContent() {
     const { isShowSpoiler } = useTheme();
 
     const [allGachas, setAllGachas] = useState<IGachaInfo[]>([]);
+    const [allCards, setAllCards] = useState<ICardInfo[]>([]);
     const [translations, setTranslations] = useState<TranslationData | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -26,6 +27,10 @@ function GachaContent() {
     const [searchQuery, setSearchQuery] = useState("");
     const [sortBy, setSortBy] = useState<"id" | "startAt">("startAt");
     const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+    const [selectedCategory, setSelectedCategory] = useState<GachaCategoryType>("all");
+    const [selectedCharacters, setSelectedCharacters] = useState<number[]>([]);
+    const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
+
 
     // Pagination with scroll restore
     const { displayCount, loadMore, resetDisplayCount } = useScrollRestore({
@@ -43,13 +48,29 @@ function GachaContent() {
         const search = searchParams.get("search");
         const sort = searchParams.get("sortBy");
         const order = searchParams.get("sortOrder");
+        const category = searchParams.get("category") as GachaCategoryType | null;
+        const chars = searchParams.get("chars");
+        const units = searchParams.get("units");
 
-        const hasUrlParams = search || sort || order;
+        const hasUrlParams = search || sort || order || category || chars || units;
 
         if (hasUrlParams) {
             if (search) setSearchQuery(search);
             if (sort) setSortBy(sort as "id" | "startAt");
             if (order) setSortOrder(order as "asc" | "desc");
+            if (category && ["all", "wish_pick", "normal_pickup"].includes(category)) {
+                setSelectedCategory(category);
+            }
+            if (chars) {
+                try {
+                    setSelectedCharacters(JSON.parse(chars));
+                } catch { /* ignore */ }
+            }
+            if (units) {
+                try {
+                    setSelectedUnitIds(JSON.parse(units));
+                } catch { /* ignore */ }
+            }
         } else {
             try {
                 const saved = sessionStorage.getItem(STORAGE_KEY);
@@ -58,6 +79,9 @@ function GachaContent() {
                     if (filters.search) setSearchQuery(filters.search);
                     if (filters.sortBy) setSortBy(filters.sortBy);
                     if (filters.sortOrder) setSortOrder(filters.sortOrder);
+                    if (filters.category) setSelectedCategory(filters.category);
+                    if (filters.chars) setSelectedCharacters(filters.chars);
+                    if (filters.units) setSelectedUnitIds(filters.units);
                 }
             } catch (e) {
                 console.log("Could not restore filters from sessionStorage");
@@ -74,6 +98,9 @@ function GachaContent() {
             search: searchQuery,
             sortBy,
             sortOrder,
+            category: selectedCategory,
+            chars: selectedCharacters,
+            units: selectedUnitIds,
         };
         try {
             sessionStorage.setItem(STORAGE_KEY, JSON.stringify(filters));
@@ -86,11 +113,14 @@ function GachaContent() {
         if (searchQuery) params.set("search", searchQuery);
         if (sortBy !== "startAt") params.set("sortBy", sortBy);
         if (sortOrder !== "desc") params.set("sortOrder", sortOrder);
+        if (selectedCategory !== "all") params.set("category", selectedCategory);
+        if (selectedCharacters.length > 0) params.set("chars", JSON.stringify(selectedCharacters));
+        if (selectedUnitIds.length > 0) params.set("units", JSON.stringify(selectedUnitIds));
 
         const queryString = params.toString();
         const newUrl = queryString ? `/gacha?${queryString}` : "/gacha";
         router.replace(newUrl, { scroll: false });
-    }, [searchQuery, sortBy, sortOrder, router, filtersInitialized]);
+    }, [searchQuery, sortBy, sortOrder, selectedCategory, selectedCharacters, selectedUnitIds, router, filtersInitialized]);
 
     // Fetch gachas from master data
     useEffect(() => {
@@ -98,11 +128,13 @@ function GachaContent() {
         async function fetchGachas() {
             try {
                 setIsLoading(true);
-                const [data, translationsData] = await Promise.all([
+                const [data, cardsData, translationsData] = await Promise.all([
                     fetchMasterData<IGachaInfo[]>("gachas.json"),
+                    fetchMasterData<ICardInfo[]>("cards.json"),
                     loadTranslations(),
                 ]);
                 setAllGachas(data);
+                setAllCards(cardsData);
                 setTranslations(translationsData);
                 setError(null);
             } catch (err) {
@@ -118,6 +150,30 @@ function GachaContent() {
     // Filter and sort gachas
     const filteredGachas = useMemo(() => {
         let result = [...allGachas];
+
+        // Apply category filter
+        if (selectedCategory !== "all") {
+            if (selectedCategory === "wish_pick") {
+                result = result.filter(g => isWishGacha(g));
+            } else if (selectedCategory === "normal_pickup") {
+                result = result.filter(g => !isWishGacha(g));
+            }
+        }
+
+        // Apply character filter (filter by pickup characters)
+        if (selectedCharacters.length > 0) {
+            const cardMap = new Map(allCards.map(card => [card.id, card]));
+            result = result.filter(gacha => {
+                const pickupCharIds = new Set<number>();
+                for (const pickup of gacha.gachaPickups || []) {
+                    const card = cardMap.get(pickup.cardId);
+                    if (card) {
+                        pickupCharIds.add(card.characterId);
+                    }
+                }
+                return selectedCharacters.some(charId => pickupCharIds.has(charId));
+            });
+        }
 
         // Apply search query (supports both name, ID, and Chinese translations)
         if (searchQuery.trim()) {
@@ -156,7 +212,7 @@ function GachaContent() {
         });
 
         return result;
-    }, [allGachas, searchQuery, sortBy, sortOrder, isShowSpoiler, translations]);
+    }, [allGachas, allCards, searchQuery, sortBy, sortOrder, isShowSpoiler, translations, selectedCategory, selectedCharacters]);
 
     // Displayed gachas (with pagination)
     const displayedGachas = useMemo(() => {
@@ -179,6 +235,21 @@ function GachaContent() {
             sortBy={sortBy}
             sortOrder={sortOrder}
             onSortChange={handleSortChange}
+            selectedCategory={selectedCategory}
+            onCategoryChange={(category) => {
+                setSelectedCategory(category);
+                resetDisplayCount();
+            }}
+            selectedCharacters={selectedCharacters}
+            onCharacterChange={(chars) => {
+                setSelectedCharacters(chars);
+                resetDisplayCount();
+            }}
+            selectedUnitIds={selectedUnitIds}
+            onUnitIdsChange={(units) => {
+                setSelectedUnitIds(units);
+                resetDisplayCount();
+            }}
             totalGachas={allGachas.length}
             filteredGachas={filteredGachas.length}
         />
@@ -188,6 +259,9 @@ function GachaContent() {
         searchQuery,
         sortBy,
         sortOrder,
+        selectedCategory,
+        selectedCharacters,
+        selectedUnitIds,
         allGachas.length,
         filteredGachas.length,
     ]);

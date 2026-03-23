@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useBreadcrumb } from "@/contexts/BreadcrumbContext";
 import Image from "next/image";
 import MainLayout from "@/components/MainLayout";
-import { ICardInfo, IGachaInfo, IGachaDetail, GACHA_TYPE_LABELS, getRarityNumber, isTrainableCard, CardRarityType, IGachaBehavior, IGachaCardRarityRate } from "@/types/types";
+import { ICardInfo, IGachaInfo, IGachaDetail, GACHA_TYPE_LABELS, getRarityNumber, isTrainableCard, CardRarityType, IGachaBehavior, IGachaCardRarityRate, isWishGacha } from "@/types/types";
 import { getGachaLogoUrl, getGachaScreenUrl } from "@/lib/assets";
 import { useTheme } from "@/contexts/ThemeContext";
 import SekaiCardThumbnail from "@/components/cards/SekaiCardThumbnail";
@@ -52,6 +52,60 @@ const LOCAL_ATTR_ICONS: Record<string, string> = {
     pure: "/data/icon/Pure.webp",
 };
 
+function buildCumulativeWeights(weights: number[]): number[] {
+    const cumulative: number[] = [];
+    let total = 0;
+
+    for (const weight of weights) {
+        total += weight;
+        cumulative.push(total);
+    }
+
+    return cumulative;
+}
+
+function pickByWeight<T>(items: T[], getWeight: (item: T) => number): T | null {
+    if (items.length === 0) return null;
+
+    let totalWeight = 0;
+    for (const item of items) {
+        totalWeight += Math.max(0, getWeight(item));
+    }
+
+    if (totalWeight <= 0) return null;
+
+    const roll = Math.random() * totalWeight;
+    let accumulated = 0;
+
+    for (const item of items) {
+        accumulated += Math.max(0, getWeight(item));
+        if (roll < accumulated) {
+            return item;
+        }
+    }
+
+    return items[items.length - 1] ?? null;
+}
+
+function pickByChance<T>(entries: Array<{ item: T; chance: number }>): T | null {
+    if (entries.length === 0) return null;
+
+    const totalChance = entries.reduce((sum, entry) => sum + Math.max(0, entry.chance), 0);
+    if (totalChance <= 0) return null;
+
+    const roll = Math.random() * totalChance;
+    let accumulated = 0;
+
+    for (const entry of entries) {
+        accumulated += Math.max(0, entry.chance);
+        if (roll < accumulated) {
+            return entry.item;
+        }
+    }
+
+    return entries[entries.length - 1]?.item ?? null;
+}
+
 export default function GachaDetailClient() {
     const router = useRouter();
     const params = useParams();
@@ -66,6 +120,7 @@ export default function GachaDetailClient() {
     const [activeImageTab, setActiveImageTab] = useState<"logo" | "bg">("logo");
     const [imageViewerOpen, setImageViewerOpen] = useState(false);
     const [customSpinCount, setCustomSpinCount] = useState<string>("");
+    const [selectedWishCardIds, setSelectedWishCardIds] = useState<number[]>([]);
     const { isShowSpoiler, useTrainedThumbnail, assetSource } = useTheme();
     const { setDetailName } = useBreadcrumb();
 
@@ -96,13 +151,11 @@ export default function GachaDetailClient() {
             try {
                 setIsLoading(true);
 
-                // Fetch gacha and cards from master data
                 const [gachasData, cardsData] = await Promise.all([
-                    fetchMasterData<IGachaInfo[]>("gachas.json"),
-                    fetchMasterData<ICardInfo[]>("cards.json")
+                    fetchMasterData<IGachaInfo[]>("gachas.json", true),
+                    fetchMasterData<ICardInfo[]>("cards.json", true)
                 ]);
 
-                // Find the specific gacha
                 const gachaIdNum = parseInt(gachaId, 10);
                 const foundGacha = gachasData.find(g => g.id === gachaIdNum);
 
@@ -134,6 +187,10 @@ export default function GachaDetailClient() {
         });
     };
 
+    const isWishPickGacha = useMemo(() => {
+        return gacha ? isWishGacha(gacha) : false;
+    }, [gacha]);
+
     // Get pickup cards from the gachaPickups
     const pickupCards = useMemo(() => {
         if (!gacha) return [];
@@ -142,6 +199,69 @@ export default function GachaDetailClient() {
             .map(cardId => cards.find(c => c.id === cardId))
             .filter((c): c is ICardInfo => c !== undefined);
     }, [gacha, cards]);
+
+    const fixedWishCards = useMemo(() => {
+        if (!gacha) return [] as ICardInfo[];
+        const fixedIds = new Set(
+            gacha.gachaDetails
+                .filter(detail => detail.isWish && detail.gachaDetailWishType === "fixed")
+                .map(detail => detail.cardId)
+        );
+        return pickupCards.filter(card => fixedIds.has(card.id));
+    }, [gacha, pickupCards]);
+
+    const cardMap = useMemo(() => new Map(cards.map(card => [card.id, card])), [cards]);
+
+    const dreamPickNewPuCards = useMemo(() => {
+        if (!gacha || !isWishPickGacha) return [] as ICardInfo[];
+        return gacha.gachaDetails
+            .filter(detail => !detail.isWish)
+            .map(detail => cardMap.get(detail.cardId))
+            .filter((card): card is ICardInfo => !!card && card.cardRarityType === "rarity_4");
+    }, [gacha, isWishPickGacha, cardMap]);
+
+    const selectedWishCards = useMemo(() => {
+        if (!isWishPickGacha || selectedWishCardIds.length === 0) {
+            return [] as ICardInfo[];
+        }
+        const selectedSet = new Set(selectedWishCardIds);
+        return fixedWishCards.filter(card => selectedSet.has(card.id));
+    }, [isWishPickGacha, fixedWishCards, selectedWishCardIds]);
+
+    const activePickupCards = useMemo(() => {
+        if (!isWishPickGacha) return pickupCards;
+        return [...dreamPickNewPuCards, ...selectedWishCards];
+    }, [isWishPickGacha, dreamPickNewPuCards, selectedWishCards, pickupCards]);
+
+    const fixedWishCardIds = useMemo(() => {
+        return new Set(fixedWishCards.map(card => card.id));
+    }, [fixedWishCards]);
+
+    const dreamPickSelectionLimit = useMemo(() => {
+        if (!gacha) return 0;
+        return gacha.wishFixedSelectCount ?? fixedWishCards.length;
+    }, [gacha, fixedWishCards.length]);
+
+    useEffect(() => {
+        if (!isWishPickGacha) {
+            setSelectedWishCardIds([]);
+            return;
+        }
+
+        if (fixedWishCards.length === 0) {
+            setSelectedWishCardIds([]);
+            return;
+        }
+
+        setSelectedWishCardIds(prev => {
+            const validPrev = prev.filter(id => fixedWishCards.some(card => card.id === id));
+            if (validPrev.length === dreamPickSelectionLimit) {
+                return validPrev;
+            }
+            const fallback = fixedWishCards.slice(0, dreamPickSelectionLimit).map(card => card.id);
+            return validPrev.length > 0 ? validPrev.slice(0, dreamPickSelectionLimit) : fallback;
+        });
+    }, [isWishPickGacha, fixedWishCards, dreamPickSelectionLimit]);
 
     // Get gacha status
     const getGachaStatus = () => {
@@ -202,24 +322,34 @@ export default function GachaDetailClient() {
         }
     }, [gacha]);
 
-    // Calculate weights for each rarity
-    useEffect(() => {
-        if (cards.length > 0 && gacha && gachaRarityRates.length > 0) {
-            const weightArr = gachaRarityRates.map(() => 0);
-            gacha.gachaDetails.forEach(detail => {
-                const card = cards.find(c => c.id === detail.cardId);
-                if (card) {
-                    const idx = gachaRarityRates.findIndex(
-                        rate => rate.cardRarityType === card.cardRarityType
-                    );
-                    if (idx !== -1) {
-                        weightArr[idx] += detail.weight;
-                    }
+    const rateCardPools = useMemo(() => {
+        if (!gacha || cards.length === 0 || gachaRarityRates.length === 0) return [] as IGachaDetail[][];
+
+        return gachaRarityRates.map(rate => {
+            return gacha.gachaDetails.filter(detail => {
+                const card = cardMap.get(detail.cardId);
+                if (!card || card.cardRarityType !== rate.cardRarityType) return false;
+
+                const lotteryType = rate.lotteryType ?? "normal";
+                if (lotteryType === "categorized_wish") {
+                    return !!detail.isWish;
                 }
+
+                if (lotteryType === "normal") {
+                    return !detail.isWish;
+                }
+
+                return true;
             });
-            setWeights(weightArr);
+        });
+    }, [cards, gacha, gachaRarityRates, cardMap]);
+
+    // Calculate weights for each rate bucket
+    useEffect(() => {
+        if (rateCardPools.length > 0) {
+            setWeights(rateCardPools.map(pool => pool.reduce((sum, detail) => sum + detail.weight, 0)));
         }
-    }, [cards, gacha, gachaRarityRates]);
+    }, [rateCardPools]);
 
     // Gacha simulation function
     const doGacha = useCallback((behavior: IGachaBehavior) => {
@@ -228,27 +358,8 @@ export default function GachaDetailClient() {
         const rollTimes = behavior.spinCount;
         const rollResult = gachaRarityRates.map(() => 0);
 
-        const normalSum = normalRates.reduce(
-            (sum, curr) => [...sum, curr + (sum.slice(-1)[0] || 0)],
-            [] as number[]
-        );
-        const guaranteeSum = guaranteedRates.reduce(
-            (sum, curr) => [...sum, curr + (sum.slice(-1)[0] || 0)],
-            [] as number[]
-        );
-
-        const rollableCards = gachaRarityRates.map(rate =>
-            gacha.gachaDetails
-                .filter(gd => {
-                    const card = cards.find(c => c.id === gd.cardId);
-                    return card?.cardRarityType === rate.cardRarityType;
-                })
-                .sort((a, b) => a.weight - b.weight)
-        );
-
-        const rollWeights = rollableCards.map(elem =>
-            elem?.map(e => e.weight)
-        );
+        const normalSum = buildCumulativeWeights(normalRates);
+        const guaranteeSum = buildCumulativeWeights(guaranteedRates);
 
         const tmpGachaResult: IGachaDetail[] = [];
         const isOverRarity = behavior.gachaBehaviorType.startsWith("over_rarity");
@@ -261,26 +372,72 @@ export default function GachaDetailClient() {
             }
         }
 
+        const wishRateIndex = gachaRarityRates.findIndex(
+            rate => rate.cardRarityType === "rarity_4" && rate.lotteryType === "categorized_wish"
+        );
+        const normalFourStarIndex = gachaRarityRates.findIndex(
+            rate => rate.cardRarityType === "rarity_4" && rate.lotteryType === "normal"
+        );
+        const dreamPickSingleRate = 0.4;
+        const totalDreamPickFourStarRate = [wishRateIndex, normalFourStarIndex]
+            .filter(idx => idx !== -1)
+            .reduce((sum, idx) => sum + (gachaRarityRates[idx]?.rate || 0), 0);
+
+        const pickDreamPickCard = (): { pulled: IGachaDetail | null; countAsWishRate: boolean } => {
+            if (!gacha) return { pulled: null, countAsWishRate: true };
+
+            const selectedSet = new Set(selectedWishCardIds);
+            const selectedFixed = rateCardPools[wishRateIndex]?.filter(detail => detail.gachaDetailWishType === "fixed" && selectedSet.has(detail.cardId)) || [];
+            const newPu = rateCardPools[normalFourStarIndex] || [];
+            const allDreamPickFourStars = [...new Map(
+                [...(rateCardPools[wishRateIndex] || []), ...newPu].map(detail => [detail.cardId, detail])
+            ).values()];
+
+            const fixedEntries = selectedFixed.map(detail => ({ item: detail, chance: dreamPickSingleRate }));
+            const newPuEntries = newPu.map(detail => ({ item: detail, chance: dreamPickSingleRate }));
+            const promotedIds = new Set([...selectedFixed, ...newPu].map(detail => detail.cardId));
+            const remainingPool = allDreamPickFourStars.filter(detail => !promotedIds.has(detail.cardId));
+            const promotedChance = [...fixedEntries, ...newPuEntries].reduce((sum, entry) => sum + entry.chance, 0);
+            const remainingChance = Math.max(0, totalDreamPickFourStarRate - promotedChance);
+            const totalRemainingWeight = remainingPool.reduce((sum, detail) => sum + detail.weight, 0);
+            const remainingEntries = totalRemainingWeight > 0
+                ? remainingPool.map(detail => ({
+                    item: detail,
+                    chance: remainingChance * (detail.weight / totalRemainingWeight),
+                }))
+                : [];
+
+            const pulled = pickByChance([...fixedEntries, ...newPuEntries, ...remainingEntries]);
+            const countAsWishRate = pulled ? !!pulled.isWish : true;
+            return { pulled, countAsWishRate };
+        };
+
         let noOverRarityCount = 0;
-        let batchPickupCount = 0;
 
         for (let i = 0; i < rollTimes; i++) {
             let pulledCardDetail: IGachaDetail | null = null;
             if (i % 10 === 9 && isOverRarity && noOverRarityCount === 9 && guaranteeSum.length > 0) {
-                // Guaranteed roll for 10th pull
                 const roll = Math.random() * 100;
                 const idx = guaranteeSum.findIndex(rate => roll < rate);
                 if (idx !== -1) {
-                    rollResult[idx] += 1;
-                    const weightArr = rollWeights[idx].reduce(
-                        (sum, curr) => [...sum, curr + (sum.slice(-1)[0] || 0)],
-                        [] as number[]
-                    );
-                    const weightSum = weights[idx];
-                    const rand = Math.floor(Math.random() * weightSum);
-                    const pulled = rollableCards[idx][weightArr.filter(w => w <= rand).length];
-                    tmpGachaResult.push(pulled);
-                    pulledCardDetail = pulled;
+                    if (isWishPickGacha && (idx === wishRateIndex || idx === normalFourStarIndex)) {
+                        const { pulled, countAsWishRate } = pickDreamPickCard();
+                        if (pulled) {
+                            const targetIdx = countAsWishRate ? wishRateIndex : normalFourStarIndex;
+                            if (targetIdx !== -1) {
+                                rollResult[targetIdx] += 1;
+                            }
+                            tmpGachaResult.push(pulled);
+                            pulledCardDetail = pulled;
+                        }
+                    } else {
+                        const pulled = pickByWeight(rateCardPools[idx] || [], detail => detail.weight);
+                        if (pulled) {
+                            rollResult[idx] += 1;
+                            tmpGachaResult.push(pulled);
+                            pulledCardDetail = pulled;
+                        }
+                    }
                 }
                 noOverRarityCount = 0;
                 continue;
@@ -290,41 +447,47 @@ export default function GachaDetailClient() {
 
             const roll = Math.random() * 100;
             const idx = normalSum.findIndex(rate => roll < rate);
-            if (idx !== -1 && rollableCards[idx].length > 0) {
-                rollResult[idx] += 1;
-                const weightArr = rollWeights[idx].reduce(
-                    (sum, curr) => [...sum, curr + (sum.slice(-1)[0] || 0)],
-                    [] as number[]
-                );
-                const weightSum = weights[idx];
-                const rand = Math.floor(Math.random() * weightSum);
-                const pulled = rollableCards[idx][weightArr.filter(w => w <= rand).length];
-                tmpGachaResult.push(pulled);
-                pulledCardDetail = pulled;
+            if (idx !== -1 && (rateCardPools[idx]?.length || 0) > 0) {
+                if (isWishPickGacha && (idx === wishRateIndex || idx === normalFourStarIndex)) {
+                    const { pulled, countAsWishRate } = pickDreamPickCard();
+                    if (pulled) {
+                        const targetIdx = countAsWishRate ? wishRateIndex : normalFourStarIndex;
+                        if (targetIdx !== -1) {
+                            rollResult[targetIdx] += 1;
+                        }
+                        tmpGachaResult.push(pulled);
+                        pulledCardDetail = pulled;
 
-                if (isOverRarity && cardRarityTypeToRarity[gachaRarityRates[idx].cardRarityType] < overRarityLevel) {
-                    noOverRarityCount += 1;
-                }
-            }
+                        if (isOverRarity && cardRarityTypeToRarity[gachaRarityRates[idx].cardRarityType] < overRarityLevel) {
+                            noOverRarityCount += 1;
+                        }
+                    }
+                } else {
+                    const pulled = pickByWeight(rateCardPools[idx] || [], detail => detail.weight);
+                    if (pulled) {
+                        rollResult[idx] += 1;
+                        tmpGachaResult.push(pulled);
+                        pulledCardDetail = pulled;
 
-            // Check if pulled card is pickup
-            if (pulledCardDetail) {
-                const card = cards.find(c => c.id === pulledCardDetail!.cardId);
-                if (card && pickupCards.some(p => p.id === card.id)) {
-                    batchPickupCount++;
+                        if (isOverRarity && cardRarityTypeToRarity[gachaRarityRates[idx].cardRarityType] < overRarityLevel) {
+                            noOverRarityCount += 1;
+                        }
+                    }
                 }
             }
         }
 
-        // Capture startSpinCount synchronously before any state updates
-        // Use functional update to get accurate current spinCount
         let actualStartSpinCount = 0;
+        const derivedPickupCount = tmpGachaResult.reduce((count, detail) => {
+            return count + (activePickupCards.some(p => p.id === detail.cardId) ? 1 : 0);
+        }, 0);
+
         setStatistic(stats => {
             actualStartSpinCount = stats.spinCount;
             return {
                 counts: stats.counts.map((count, idx) => rollResult[idx] + count),
                 spinCount: stats.spinCount + behavior.spinCount,
-                pickupCount: (stats.pickupCount || 0) + batchPickupCount,
+                pickupCount: (stats.pickupCount || 0) + derivedPickupCount,
             };
         });
 
@@ -353,7 +516,7 @@ export default function GachaDetailClient() {
             // Reverse so newest is first, then prepend to existing history
             return [...new4StarDetails.reverse(), ...prev];
         });
-    }, [cards, gacha, gachaRarityRates, guaranteedRates, normalRates, weights, pickupCards]);
+    }, [cards, gacha, gachaRarityRates, guaranteedRates, normalRates, activePickupCards, rateCardPools, isWishPickGacha, selectedWishCardIds]);
 
     // Reset gacha statistics
     const resetGacha = useCallback(() => {
@@ -611,44 +774,136 @@ export default function GachaDetailClient() {
 
                         {/* Pickup Cards */}
                         {pickupCards.length > 0 && (
-                            <div className="bg-white rounded-2xl shadow-lg ring-1 ring-slate-200 overflow-hidden">
-                                <div className="px-5 py-4 border-b border-slate-100 bg-gradient-to-r from-miku/5 to-transparent">
-                                    <h2 className="font-bold text-slate-800 flex items-center gap-2">
-                                        <svg className="w-5 h-5 text-miku" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
-                                        </svg>
-                                        PICKUP 卡牌 ({pickupCards.length})
-                                    </h2>
-                                </div>
-                                <div className="p-4">
-                                    <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-4 xl:grid-cols-6 gap-1.5">
-                                        {pickupCards.map(card => {
-                                            const TRAINED_ONLY_CARDS = [1167];
-                                            const isTrainedOnlyCard = TRAINED_ONLY_CARDS.includes(card.id);
-                                            const showTrained = isTrainedOnlyCard || (useTrainedThumbnail && isTrainableCard(card) && card.cardRarityType !== "rarity_birthday");
-                                            const pullCount = history4Stars.filter(h => h.cardId === card.id).length;
-                                            const isPulled = pullCount > 0;
-
-                                            return (
-                                                <Link
-                                                    key={card.id}
-                                                    href={`/cards/${card.id}`}
-                                                    className="group block"
-                                                >
-                                                    <div className={`rounded-lg overflow-hidden bg-white hover:shadow-lg transition-all ${isPulled ? 'ring-2 ring-green-400' : 'ring-1 ring-slate-200 hover:ring-miku'}`}>
-                                                        <SekaiCardThumbnail card={card} trained={showTrained} className="w-full" />
-                                                        {isPulled && (
-                                                            <div className="flex items-center justify-center gap-0.5 bg-gradient-to-r from-green-500 to-green-400 text-white text-[8px] font-black py-0.5 leading-none">
-                                                                <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20">
-                                                                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                                                </svg>
-                                                                {pullCount > 1 && <span>×{pullCount}</span>}
-                                                            </div>
-                                                        )}
+                            <div className="space-y-4">
+                                {isWishPickGacha && (
+                                    <div className="bg-white rounded-2xl shadow-lg ring-1 ring-slate-200 overflow-hidden">
+                                        <div className="px-5 py-4 border-b border-slate-100 bg-gradient-to-r from-miku/5 to-transparent">
+                                            <h2 className="font-bold text-slate-800 flex items-center gap-2">
+                                                <svg className="w-5 h-5 text-miku" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                                                </svg>
+                                                当前自选 PU
+                                            </h2>
+                                        </div>
+                                        <div className="p-4 space-y-4">
+                                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 sm:p-4">
+                                                <div className="flex items-center justify-between gap-3 mb-3">
+                                                    <div>
+                                                        <h3 className="text-sm font-bold text-slate-800">选择自选 PU 卡牌</h3>
+                                                        <p className="text-xs text-slate-500 mt-1">
+                                                            需要选择 {dreamPickSelectionLimit} 张卡。所选自选 PU 与当期新 PU 均按单张 0.4% 计算，其余所有 4★ 共享剩余概率。
+                                                        </p>
                                                     </div>
-                                                </Link>
-                                            );
-                                        })}
+                                                    <span className="shrink-0 px-2.5 py-1 rounded-full bg-miku/10 text-miku text-xs font-bold">
+                                                        {selectedWishCardIds.length}/{dreamPickSelectionLimit}
+                                                    </span>
+                                                </div>
+                                                <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-4 xl:grid-cols-6 gap-1.5">
+                                                    {fixedWishCards.map(card => {
+                                                        const TRAINED_ONLY_CARDS = [1167];
+                                                        const isTrainedOnlyCard = TRAINED_ONLY_CARDS.includes(card.id);
+                                                        const showTrained = isTrainedOnlyCard || (useTrainedThumbnail && isTrainableCard(card) && card.cardRarityType !== "rarity_birthday");
+                                                        const isSelected = selectedWishCardIds.includes(card.id);
+                                                        const canSelectMore = selectedWishCardIds.length < dreamPickSelectionLimit;
+                                                        return (
+                                                            <button
+                                                                key={card.id}
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    setSelectedWishCardIds(prev => {
+                                                                        if (prev.includes(card.id)) {
+                                                                            return prev.filter(id => id !== card.id);
+                                                                        }
+                                                                        if (prev.length >= dreamPickSelectionLimit) {
+                                                                            return prev;
+                                                                        }
+                                                                        return [...prev, card.id];
+                                                                    });
+                                                                }}
+                                                                className={`group block rounded-lg overflow-hidden bg-white transition-all ${isSelected ? 'ring-2 ring-miku shadow-md' : 'ring-1 ring-slate-200 hover:ring-miku'} ${!isSelected && !canSelectMore ? 'opacity-60' : ''}`}
+                                                                title={card.prefix}
+                                                            >
+                                                                <SekaiCardThumbnail card={card} trained={showTrained} className="w-full" />
+                                                                <div className={`text-center text-[10px] font-black py-1 leading-none ${isSelected ? 'bg-miku text-white' : 'bg-slate-100 text-slate-500'}`}>
+                                                                    {isSelected ? '已选择' : '点击选择'}
+                                                                </div>
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                            <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-4 xl:grid-cols-6 gap-1.5">
+                                                {selectedWishCards.map(card => {
+                                                    const TRAINED_ONLY_CARDS = [1167];
+                                                    const isTrainedOnlyCard = TRAINED_ONLY_CARDS.includes(card.id);
+                                                    const showTrained = isTrainedOnlyCard || (useTrainedThumbnail && isTrainableCard(card) && card.cardRarityType !== "rarity_birthday");
+                                                    const pullCount = history4Stars.filter(h => h.cardId === card.id).length;
+                                                    const isPulled = pullCount > 0;
+
+                                                    return (
+                                                        <Link
+                                                            key={card.id}
+                                                            href={`/cards/${card.id}`}
+                                                            className="group block"
+                                                        >
+                                                            <div className={`rounded-lg overflow-hidden bg-white hover:shadow-lg transition-all ${isPulled ? 'ring-2 ring-green-400' : 'ring-1 ring-slate-200 hover:ring-miku'}`}>
+                                                                <SekaiCardThumbnail card={card} trained={showTrained} className="w-full" />
+                                                                {isPulled && (
+                                                                    <div className="flex items-center justify-center gap-0.5 bg-gradient-to-r from-green-500 to-green-400 text-white text-[8px] font-black py-0.5 leading-none">
+                                                                        <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20">
+                                                                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                                                        </svg>
+                                                                        {pullCount > 1 && <span>×{pullCount}</span>}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </Link>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="bg-white rounded-2xl shadow-lg ring-1 ring-slate-200 overflow-hidden">
+                                    <div className="px-5 py-4 border-b border-slate-100 bg-gradient-to-r from-miku/5 to-transparent">
+                                        <h2 className="font-bold text-slate-800 flex items-center gap-2">
+                                            <svg className="w-5 h-5 text-miku" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                                            </svg>
+                                            {isWishPickGacha ? `当期新 PU 卡牌 (${dreamPickNewPuCards.length})` : `PICKUP 卡牌 (${pickupCards.length})`}
+                                        </h2>
+                                    </div>
+                                    <div className="p-4">
+                                        <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-4 xl:grid-cols-6 gap-1.5">
+                                            {(isWishPickGacha ? dreamPickNewPuCards : pickupCards).map(card => {
+                                                const TRAINED_ONLY_CARDS = [1167];
+                                                const isTrainedOnlyCard = TRAINED_ONLY_CARDS.includes(card.id);
+                                                const showTrained = isTrainedOnlyCard || (useTrainedThumbnail && isTrainableCard(card) && card.cardRarityType !== "rarity_birthday");
+                                                const pullCount = history4Stars.filter(h => h.cardId === card.id).length;
+                                                const isPulled = pullCount > 0;
+
+                                                return (
+                                                    <Link
+                                                        key={card.id}
+                                                        href={`/cards/${card.id}`}
+                                                        className="group block"
+                                                    >
+                                                        <div className={`rounded-lg overflow-hidden bg-white hover:shadow-lg transition-all ${isPulled ? 'ring-2 ring-green-400' : 'ring-1 ring-slate-200 hover:ring-miku'}`}>
+                                                            <SekaiCardThumbnail card={card} trained={showTrained} className="w-full" />
+                                                            {isPulled && (
+                                                                <div className="flex items-center justify-center gap-0.5 bg-gradient-to-r from-green-500 to-green-400 text-white text-[8px] font-black py-0.5 leading-none">
+                                                                    <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20">
+                                                                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                                                    </svg>
+                                                                    {pullCount > 1 && <span>×{pullCount}</span>}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </Link>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -767,7 +1022,7 @@ export default function GachaDetailClient() {
                                             <tr className="border-b border-slate-100 last:border-0 hover:bg-pink-50/50 transition-colors bg-pink-50/30">
                                                 <td className="py-2 px-3 font-bold text-pink-500 flex items-center gap-1">
                                                     <span className="bg-pink-500 text-white text-[10px] px-1 rounded">UP</span>
-                                                    角色
+                                                    {isWishPickGacha ? "Dream Pick PU" : "角色"}
                                                 </td>
                                                 <td className="text-center py-2 px-3 text-slate-600">{statistic.pickupCount || 0}</td>
                                                 <td className="text-center py-2 px-3 text-pink-500 font-bold">
@@ -777,7 +1032,9 @@ export default function GachaDetailClient() {
                                             {gachaRarityRates.map((rate, idx) => {
                                                 const rarityLabel = rate.cardRarityType === "rarity_birthday"
                                                     ? "🎂 生日"
-                                                    : `${cardRarityTypeToRarity[rate.cardRarityType]}★`;
+                                                    : rate.cardRarityType === "rarity_4" && isWishPickGacha
+                                                        ? `${cardRarityTypeToRarity[rate.cardRarityType]}★（${rate.lotteryType === "categorized_wish" ? "自选池" : "常规池"}）`
+                                                        : `${cardRarityTypeToRarity[rate.cardRarityType]}★`;
                                                 const count = statistic.counts[idx] || 0;
                                                 const percentage = statistic.spinCount > 0
                                                     ? ((count / statistic.spinCount) * 100).toFixed(2)
@@ -816,7 +1073,7 @@ export default function GachaDetailClient() {
                                             const TRAINED_ONLY_CARDS = [1167];
                                             const isTrainedOnlyCard = TRAINED_ONLY_CARDS.includes(card.id);
                                             const showTrained = isTrainedOnlyCard || (useTrainedThumbnail && isTrainableCard(card) && card.cardRarityType !== "rarity_birthday");
-                                            const isPickup = pickupCards.some(p => p.id === card.id);
+                                            const isPickup = activePickupCards.some(p => p.id === card.id);
                                             const is4Star = card.cardRarityType === "rarity_4" || card.cardRarityType === "rarity_birthday";
 
                                             return (
@@ -866,7 +1123,7 @@ export default function GachaDetailClient() {
                                             const TRAINED_ONLY_CARDS = [1167];
                                             const isTrainedOnlyCard = TRAINED_ONLY_CARDS.includes(card.id);
                                             const showTrained = isTrainedOnlyCard || (useTrainedThumbnail && isTrainableCard(card) && card.cardRarityType !== "rarity_birthday");
-                                            const isPickup = pickupCards.some(p => p.id === card.id);
+                                            const isPickup = activePickupCards.some(p => p.id === card.id);
                                             const is4Star = card.cardRarityType === "rarity_4" || card.cardRarityType === "rarity_birthday";
 
                                             const currentPullIndex = detail.pullIndex || 0;

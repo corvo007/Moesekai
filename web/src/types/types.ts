@@ -349,6 +349,7 @@ export interface IGachaCardRarityRate {
     id: number;
     gachaId: number;
     cardRarityType: CardRarityType;
+    lotteryType?: string;
     rate: number;
 }
 
@@ -358,6 +359,7 @@ export interface IGachaDetail {
     cardId: number;
     weight: number;
     isWish?: boolean;
+    gachaDetailWishType?: "fixed" | "normal" | "limited";
 }
 
 // Gacha type labels
@@ -368,3 +370,17 @@ export const GACHA_TYPE_LABELS: Record<string, string> = {
     birthday: "生日扭蛋",
     colorful_festival: "Colorful Festival",
 };
+
+// Gacha category filter types
+export type GachaCategoryType = "all" | "wish_pick" | "normal_pickup";
+
+export const GACHA_CATEGORY_LABELS: Record<GachaCategoryType, string> = {
+    all: "全部",
+    wish_pick: "自选池",
+    normal_pickup: "普通池",
+};
+
+// Helper function to check if a gacha is a wish/pick pool
+export function isWishGacha(gacha: IGachaInfo): boolean {
+    return gacha.gachaCardRarityRates.some(rate => rate.lotteryType === "categorized_wish");
+}
