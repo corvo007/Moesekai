@@ -43,6 +43,12 @@ export interface OAuthAuthorizationResult {
     bindings: OAuthBinding[];
 }
 
+export type OAuthAuthorizationPhase =
+    | "validating_state"
+    | "exchanging_token"
+    | "loading_profile"
+    | "loading_bindings";
+
 const OAUTH2_BASE = (process.env.NEXT_PUBLIC_OAUTH2_BASE_URL || "https://toolbox-api-direct.haruki.seiunx.com/api/oauth2").replace(/\/+$/, "");
 const OAUTH2_CLIENT_ID = process.env.NEXT_PUBLIC_OAUTH2_CLIENT_ID || "";
 const OAUTH2_SCOPE = process.env.NEXT_PUBLIC_OAUTH2_SCOPE || "user:read bindings:read game-data:read";
@@ -191,6 +197,26 @@ async function oauthFetch(input: string, init?: RequestInit): Promise<Response> 
     }
 }
 
+async function readJsonWithTimeout<T>(response: Response): Promise<T> {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    try {
+        return await Promise.race<T>([
+            response.json() as Promise<T>,
+            new Promise<T>((_, reject) => {
+                timeoutId = setTimeout(() => reject(new Error("OAUTH_REQUEST_TIMEOUT")), OAUTH2_REQUEST_TIMEOUT_MS);
+            }),
+        ]);
+    } finally {
+        if (timeoutId) clearTimeout(timeoutId);
+    }
+}
+
+function reportOAuthPhase(phase: OAuthAuthorizationPhase, onPhaseChange?: (phase: OAuthAuthorizationPhase) => void) {
+    console.info("[OAuth2]", phase);
+    onPhaseChange?.(phase);
+}
+
 export async function exchangeCodeForToken(code: string, codeVerifier: string): Promise<OAuthTokenSet> {
     const config = assertOAuthConfig();
     const body = new URLSearchParams({
@@ -213,7 +239,7 @@ export async function exchangeCodeForToken(code: string, codeVerifier: string): 
         throw new Error(`TOKEN_EXCHANGE_FAILED_${response.status}`);
     }
 
-    const data = await response.json() as Record<string, unknown>;
+    const data = await readJsonWithTimeout<Record<string, unknown>>(response);
     const expiresIn = typeof data.expires_in === "number" ? data.expires_in : Number(data.expires_in || 0);
 
     return {
@@ -245,7 +271,7 @@ export async function refreshOAuthToken(refreshToken: string): Promise<OAuthToke
         throw new Error(`TOKEN_REFRESH_FAILED_${response.status}`);
     }
 
-    const data = await response.json() as Record<string, unknown>;
+    const data = await readJsonWithTimeout<Record<string, unknown>>(response);
     const expiresIn = typeof data.expires_in === "number" ? data.expires_in : Number(data.expires_in || 0);
 
     return {
@@ -282,13 +308,14 @@ async function authorizedJson<T>(path: string, accessToken: string): Promise<T> 
         throw new Error(`AUTHORIZED_REQUEST_FAILED_${response.status}_${path}`);
     }
 
-    return response.json() as Promise<T>;
+    return readJsonWithTimeout<T>(response);
 }
 
 export async function fetchOAuthProfile(accessToken: string): Promise<OAuthProfile | null> {
     try {
         return await authorizedJson<OAuthProfile>("/user/profile", accessToken);
-    } catch {
+    } catch (error) {
+        console.warn("[OAuth2] failed to load profile", error);
         return null;
     }
 }
@@ -297,8 +324,19 @@ export async function fetchOAuthBindings(accessToken: string): Promise<OAuthBind
     const data = await authorizedJson<unknown>("/user/bindings", accessToken);
     if (Array.isArray(data)) return data as OAuthBinding[];
     if (data && typeof data === "object") {
-        const maybeItems = (data as { bindings?: unknown; items?: unknown }).bindings || (data as { items?: unknown }).items;
+        const maybeItems = (data as {
+            bindings?: unknown;
+            items?: unknown;
+            data?: { bindings?: unknown; items?: unknown };
+            result?: { bindings?: unknown; items?: unknown };
+        }).bindings
+            || (data as { items?: unknown }).items
+            || (data as { data?: { bindings?: unknown; items?: unknown } }).data?.bindings
+            || (data as { data?: { bindings?: unknown; items?: unknown } }).data?.items
+            || (data as { result?: { bindings?: unknown; items?: unknown } }).result?.bindings
+            || (data as { result?: { bindings?: unknown; items?: unknown } }).result?.items;
         if (Array.isArray(maybeItems)) return maybeItems as OAuthBinding[];
+        console.warn("[OAuth2] unexpected bindings payload", data);
     }
     return [];
 }
@@ -320,7 +358,12 @@ export async function fetchOAuthGameData(accessToken: string, server: ServerType
     return authorizedJson(`/game-data/${server}/${encodeURIComponent(dataType)}/${encodeURIComponent(userId)}`, accessToken);
 }
 
-export async function resolveOAuthAuthorization(code: string, state: string): Promise<OAuthAuthorizationResult> {
+export async function resolveOAuthAuthorization(
+    code: string,
+    state: string,
+    onPhaseChange?: (phase: OAuthAuthorizationPhase) => void,
+): Promise<OAuthAuthorizationResult> {
+    reportOAuthPhase("validating_state", onPhaseChange);
     const pending = getPendingOAuthState();
     if (!pending) {
         throw new Error("OAUTH_PENDING_MISSING");
@@ -334,11 +377,12 @@ export async function resolveOAuthAuthorization(code: string, state: string): Pr
         throw new Error("OAUTH_STATE_MISMATCH");
     }
 
+    reportOAuthPhase("exchanging_token", onPhaseChange);
     const tokenSet = await exchangeCodeForToken(code, pending.codeVerifier);
-    const [profile, bindings] = await Promise.all([
-        fetchOAuthProfile(tokenSet.accessToken),
-        fetchOAuthBindings(tokenSet.accessToken),
-    ]);
+    reportOAuthPhase("loading_profile", onPhaseChange);
+    const profile = await fetchOAuthProfile(tokenSet.accessToken);
+    reportOAuthPhase("loading_bindings", onPhaseChange);
+    const bindings = await fetchOAuthBindings(tokenSet.accessToken);
 
     return { tokenSet, profile, bindings };
 }
