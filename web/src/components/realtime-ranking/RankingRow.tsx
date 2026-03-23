@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
 import RankChangeBadge from "@/components/realtime-ranking/RankChangeBadge";
@@ -8,7 +8,7 @@ import PlayerHonorPreview from "@/components/realtime-ranking/PlayerHonorPreview
 import SekaiCardThumbnail from "@/components/cards/SekaiCardThumbnail";
 import { getCharacterIconUrl } from "@/lib/assets";
 import { CHARACTER_NAMES } from "@/types/types";
-import { RealtimeRankingEntryWithDiff, RealtimeRankingMasterData } from "@/types/realtime-ranking";
+import { RealtimeRankingEntryWithDiff, RealtimeRankingMasterData, ChurnRankingEntry } from "@/types/realtime-ranking";
 import { AssetSourceType } from "@/contexts/ThemeContext";
 
 interface RankingRowProps {
@@ -16,6 +16,9 @@ interface RankingRowProps {
     masterData: RealtimeRankingMasterData;
     assetSource: AssetSourceType;
     secondsSinceUpdate?: number;
+    showChurn: boolean;
+    churnEntry?: ChurnRankingEntry;
+    onShowParkingPeriods: (userId: string) => void;
 }
 
 function formatElapsed(seconds: number): string {
@@ -23,10 +26,28 @@ function formatElapsed(seconds: number): string {
     if (seconds < 60) return `${seconds}s 前`;
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
-    return `${m}m${s > 0 ? `${s}s` : ""} 前`;
+    if (m < 60) return `${m}m${s > 0 ? `${s}s` : ""} 前`;
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return `${h}h${rm > 0 ? `${rm}m` : ""} 前`;
 }
 
-export default function RankingRow({ entry, masterData, assetSource, secondsSinceUpdate }: RankingRowProps) {
+/** 获取当前小时的 ISO key */
+function getCurrentHourKey(): string {
+    const d = new Date();
+    d.setMinutes(0, 0, 0);
+    return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** 获取近 1H 的周回数 */
+function getCurrentHourChurn(churnEntry?: ChurnRankingEntry): number {
+    if (!churnEntry) return 0;
+    const hourKey = getCurrentHourKey();
+    const found = churnEntry.hourly_churn.find((h) => h.hour === hourKey);
+    return found?.count ?? 0;
+}
+
+export default function RankingRow({ entry, masterData, assetSource, secondsSinceUpdate, showChurn, churnEntry, onShowParkingPeriods }: RankingRowProps) {
     const leaderCard = entry.leaderCardId
         ? masterData.cards.find((card) => card.id === entry.leaderCardId)
         : undefined;
@@ -48,6 +69,10 @@ export default function RankingRow({ entry, masterData, assetSource, secondsSinc
     const [flashType, setFlashType] = useState<"up" | "down" | null>(null);
     const prevScoreRef = useRef(entry.score);
 
+    // 单行展开状态（关闭全局周回面板时，允许手动展开某一行）
+    const [localExpanded, setLocalExpanded] = useState(false);
+    const showChurnRow = showChurn || localExpanded;
+
     useEffect(() => {
         if (entry.scoreDelta !== 0) {
             setFlashType(entry.scoreDelta > 0 ? "up" : "down");
@@ -60,13 +85,45 @@ export default function RankingRow({ entry, masterData, assetSource, secondsSinc
         prevScoreRef.current = entry.score;
     }, [entry.score]);
 
-    // 决定显示哪个 scoreDelta 和对应的倒计时
+    // --- Fix 1: 首次进入时利用 churn last_change 显示涨跌幅 ---
+    const churnLastChange = churnEntry?.last_change;
+    const hasChurnData = !!churnLastChange;
+
     const hasCurrentChange = entry.scoreDelta !== 0;
-    const displayScoreDelta = hasCurrentChange ? entry.scoreDelta : (entry.lastScoreDelta ?? 0);
-    const displayRankDelta = hasCurrentChange ? entry.rankDelta : (entry.lastRankDelta ?? entry.rankDelta);
-    const displayElapsed = hasCurrentChange
-        ? (secondsSinceUpdate ?? 0)
-        : (entry.lastChangedAt ? Math.floor((now - entry.lastChangedAt) / 1000) : undefined);
+
+    let displayScoreDelta: number;
+    let displayRankDelta: number;
+    let displayElapsed: number | undefined;
+
+    if (hasCurrentChange) {
+        // 有实时变动，优先使用实时数据
+        displayScoreDelta = entry.scoreDelta;
+        displayRankDelta = entry.rankDelta;
+        displayElapsed = secondsSinceUpdate ?? 0;
+    } else if (entry.lastScoreDelta != null && entry.lastScoreDelta !== 0) {
+        // 之前轮询中记录过的变动
+        displayScoreDelta = entry.lastScoreDelta;
+        displayRankDelta = entry.lastRankDelta ?? entry.rankDelta;
+        displayElapsed = entry.lastChangedAt ? Math.floor((now - entry.lastChangedAt) / 1000) : undefined;
+    } else if (entry.isNewEntry && churnLastChange) {
+        // 首次加载且有 churn 数据 → 用 churn 的 last_change
+        displayScoreDelta = churnLastChange.delta;
+        displayRankDelta = 0; // churn 没有排名变化数据
+        // 时间戳兼容：秒级 vs 毫秒级
+        const churnTime = churnLastChange.time < 1e12
+            ? churnLastChange.time * 1000
+            : churnLastChange.time;
+        displayElapsed = churnTime > 0
+            ? Math.floor((now - churnTime) / 1000)
+            : undefined;
+    } else {
+        displayScoreDelta = 0;
+        displayRankDelta = entry.rankDelta;
+        displayElapsed = undefined;
+    }
+
+    // --- Fix 3: 近 1H 周回数气泡 ---
+    const currentHourChurn = getCurrentHourChurn(churnEntry);
 
     const topThreeCardDeco: Record<number, string> = {
         1: "ring-1 ring-amber-300/70 dark:ring-amber-400/70",
@@ -133,6 +190,39 @@ export default function RankingRow({ entry, masterData, assetSource, secondsSinc
                     {isExtendedTier && (
                         <div className="mt-0.5 text-[8px] font-medium text-slate-400 dark:text-slate-500">扩展</div>
                     )}
+                    {/* 展开/收起按钮 — 全端显示在排名列下方 */}
+                    {!showChurn && churnEntry && (
+                        <div className="mt-1 flex flex-col items-center gap-0.5">
+                            {/* 移动端：1H 气泡也放在排名列 */}
+                            {currentHourChurn > 0 && (
+                                <span
+                                    className="sm:hidden inline-flex items-center justify-center rounded-full bg-miku/15 px-1.5 py-0.5 text-[9px] font-black text-miku tabular-nums dark:bg-miku/20"
+                                    title="近 1H 周回数"
+                                >
+                                    {currentHourChurn}
+                                </span>
+                            )}
+                            <button
+                                onClick={() => setLocalExpanded((v) => !v)}
+                                className={`inline-flex items-center justify-center w-5 h-5 rounded-full transition-colors ${
+                                    localExpanded
+                                        ? "bg-miku/10 text-miku"
+                                        : "text-slate-300 hover:bg-miku/10 hover:text-miku dark:text-slate-600 dark:hover:text-miku"
+                                }`}
+                                title={localExpanded ? "收起周回" : "展开周回"}
+                            >
+                                <svg
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth={2.5}
+                                    className={`w-3 h-3 transition-transform duration-200 ${localExpanded ? "rotate-180" : ""}`}
+                                >
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                                </svg>
+                            </button>
+                        </div>
+                    )}
                 </div>
 
                 {/* Avatar */}
@@ -179,7 +269,7 @@ export default function RankingRow({ entry, masterData, assetSource, secondsSinc
 
                     {/* 变动详情行 */}
                     <div className="mt-0.5 flex items-center justify-end gap-1">
-                        <RankChangeBadge rankDelta={displayRankDelta} isNewEntry={entry.isNewEntry} />
+                        <RankChangeBadge rankDelta={displayRankDelta} isNewEntry={entry.isNewEntry} hasChurnData={hasChurnData} />
                         <AnimatePresence mode="wait">
                             {displayScoreDelta !== 0 ? (
                                 <motion.span
@@ -194,7 +284,6 @@ export default function RankingRow({ entry, masterData, assetSource, secondsSinc
                                             : "bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
                                     }`}
                                 >
-                                    {/* 涨跌箭头 */}
                                     <span className="text-[8px]">{displayScoreDelta > 0 ? "▲" : "▼"}</span>
                                     <span>{displayScoreDelta > 0 ? "+" : ""}{displayScoreDelta.toLocaleString()}</span>
                                     {typeof displayElapsed === "number" && (
@@ -212,9 +301,151 @@ export default function RankingRow({ entry, masterData, assetSource, secondsSinc
                                 </motion.span>
                             )}
                         </AnimatePresence>
+
+                        {/* PC 端：1H 气泡放在分数行右侧（有足够空间） */}
+                        {!showChurn && currentHourChurn > 0 && (
+                            <span
+                                className="hidden sm:inline-flex items-center justify-center rounded-full bg-miku/15 px-1.5 py-0.5 text-[9px] font-black text-miku tabular-nums dark:bg-miku/20"
+                                title="近 1H 周回数"
+                            >
+                                {currentHourChurn}
+                            </span>
+                        )}
                     </div>
                 </div>
             </div>
+
+            {/* 周回数据展示行 */}
+            <AnimatePresence>
+                {showChurnRow && churnEntry && (
+                    <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2, ease: "easeInOut" }}
+                        className="relative z-10 overflow-hidden"
+                    >
+                        <ChurnRow churnEntry={churnEntry} userId={entry.userId} onShowParkingPeriods={onShowParkingPeriods} />
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </motion.div>
+    );
+}
+
+/** 将 hourly_churn 按 48 小时展开，最新时间在最左侧（反向排列） */
+function buildHourlyGridReversed(hourlyChurn: { hour: string; count: number }[]): { hour: number; count: number; isCurrentHour: boolean; localLabel: string }[] {
+    const currentHourKey = getCurrentHourKey();
+    const now = new Date();
+
+    // 构建一个 Map 方便查找
+    const churnMap = new Map<string, number>();
+    for (const h of hourlyChurn) {
+        churnMap.set(h.hour, h.count);
+    }
+
+    // 从当前小时开始，倒序排列 48 个小时（index 0 = 当前小时，index 47 = 47小时前）
+    const grid: { hour: number; count: number; isCurrentHour: boolean; localLabel: string }[] = [];
+
+    for (let i = 0; i < 48; i++) {
+        const t = new Date(now);
+        t.setUTCHours(t.getUTCHours() - i);
+        t.setUTCMinutes(0, 0, 0);
+        const key = t.toISOString().replace(/\.\d{3}Z$/, "Z");
+        // 使用本地小时数进行显示
+        const localT = new Date(t);
+        const hourNum = localT.getHours();
+        const isCurrentHour = key === currentHourKey;
+
+        grid.push({
+            hour: hourNum,
+            count: churnMap.get(key) ?? 0,
+            isCurrentHour,
+            localLabel: `${localT.getMonth() + 1}/${localT.getDate()} ${hourNum}:00`,
+        });
+    }
+
+    return grid;
+}
+
+/** 根据 count 值返回背景色 class */
+function getChurnCellColor(count: number, isCurrentHour: boolean): string {
+    if (count === 0) return "bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500";
+    if (isCurrentHour) return "bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300";
+    // 根据 count 深浅渐变
+    if (count >= 30) return "bg-rose-200 text-rose-800 dark:bg-rose-500/30 dark:text-rose-200";
+    if (count >= 20) return "bg-rose-150 text-rose-700 dark:bg-rose-500/25 dark:text-rose-300";
+    if (count >= 10) return "bg-rose-100 text-rose-600 dark:bg-rose-500/20 dark:text-rose-300";
+    return "bg-rose-50 text-rose-500 dark:bg-rose-500/15 dark:text-rose-400";
+}
+
+function ChurnRow({ churnEntry, userId, onShowParkingPeriods }: { churnEntry: ChurnRankingEntry; userId: string; onShowParkingPeriods: (userId: string) => void }) {
+    const grid = buildHourlyGridReversed(churnEntry.hourly_churn);
+
+    // grid[0] = 当前小时（1H），grid[1..23] = 前 1~23 小时 → 第一行
+    // grid[24..47] = 前 24~47 小时 → 第二行
+    const row1 = grid.slice(0, 24);
+    const row2 = grid.slice(24, 48);
+
+    // 自动滚动到最左侧（最新数据）— 已经是默认 scrollLeft=0
+    const scrollRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (scrollRef.current) {
+            scrollRef.current.scrollLeft = 0;
+        }
+    }, []);
+
+    return (
+        <div className="flex items-center gap-2 px-3 pb-2 pt-0.5">
+            {/* 48H 总计 */}
+            <div className="shrink-0 text-center w-10 sm:w-12">
+                <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400">48H</span>
+                <div className="text-xs font-black text-miku">{churnEntry.churn_48h}</div>
+            </div>
+
+            {/* 每小时网格 — 从右往左（最新在最左） */}
+            <div ref={scrollRef} className="flex-1 min-w-0 overflow-x-auto">
+                {/* 小时标题行 */}
+                <div className="flex gap-px mb-px">
+                    {row1.map((cell, i) => (
+                        <div key={`h-${i}`} className="flex-1 min-w-[22px] text-center text-[8px] font-medium text-slate-400 dark:text-slate-500">
+                            {i === 0 ? "1H" : cell.hour}
+                        </div>
+                    ))}
+                </div>
+                {/* 第一行（近 0~23h） */}
+                <div className="flex gap-px mb-px">
+                    {row1.map((cell, i) => (
+                        <div
+                            key={`r1-${i}`}
+                            className={`flex-1 min-w-[22px] text-center text-[9px] font-bold rounded-sm py-0.5 ${getChurnCellColor(cell.count, cell.isCurrentHour)}`}
+                            title={cell.localLabel}
+                        >
+                            {cell.count > 0 ? `${cell.count}${cell.isCurrentHour ? "*" : ""}` : ""}
+                        </div>
+                    ))}
+                </div>
+                {/* 第二行（近 24~47h） */}
+                <div className="flex gap-px">
+                    {row2.map((cell, i) => (
+                        <div
+                            key={`r2-${i}`}
+                            className={`flex-1 min-w-[22px] text-center text-[9px] font-bold rounded-sm py-0.5 ${getChurnCellColor(cell.count, cell.isCurrentHour)}`}
+                            title={cell.localLabel}
+                        >
+                            {cell.count > 0 ? `${cell.count}${cell.isCurrentHour ? "*" : ""}` : ""}
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* 停车按钮 */}
+            <button
+                onClick={() => onShowParkingPeriods(userId)}
+                className="shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-bold text-slate-500 transition-colors hover:border-miku/30 hover:bg-miku/5 hover:text-miku dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:border-miku/30 dark:hover:bg-miku/10 dark:hover:text-miku"
+            >
+                停车
+            </button>
+        </div>
     );
 }

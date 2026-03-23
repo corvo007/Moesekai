@@ -7,6 +7,7 @@ import {
     RealtimeRankingRegion,
     RealtimeRankingSnapshot,
     NormalizedPlayerHonor,
+    ChurnApiResponse,
 } from "@/types/realtime-ranking";
 import { ICardInfo } from "@/types/types";
 import { IBondsHonor, IBondsHonorWord, IGameCharaUnit, IHonorGroup, IHonorInfo } from "@/types/honor";
@@ -185,4 +186,27 @@ export async function fetchRealtimeRankingMasterData(): Promise<RealtimeRankingM
         bondsHonorWords,
         gameCharaUnits,
     };
+}
+
+export async function fetchChurnData(region: RealtimeRankingRegion): Promise<ChurnApiResponse> {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10000);
+
+    try {
+        const response = await fetch(`${BASE_URL}/${region}/churn`, {
+            cache: "no-store",
+            signal: controller.signal,
+        });
+        if (!response.ok) {
+            throw new Error(`获取周回数据失败：${response.status}`);
+        }
+        return response.json();
+    } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+            throw new Error("周回数据请求超时，请稍后重试");
+        }
+        throw error;
+    } finally {
+        window.clearTimeout(timeout);
+    }
 }

@@ -106,3 +106,52 @@ export interface RealtimeRankingMasterData {
     bondsHonorWords: IBondsHonorWord[];
     gameCharaUnits: IGameCharaUnit[];
 }
+
+// ============================================================================
+// Churn (周回) Types
+// ============================================================================
+
+export interface ChurnHourlyEntry {
+    hour: string;   // ISO 时间字符串，如 "2026-03-23T13:00:00Z"
+    count: number;
+}
+
+export interface ChurnLastChange {
+    time: number;
+    old_score: number;
+    new_score: number;
+    delta: number;
+}
+
+export interface ChurnRecentActivity {
+    count: number;
+    changed_at: number[];
+}
+
+export interface ChurnParkingPeriod {
+    /** Unix 毫秒时间戳 */
+    start_time: number;
+    /** Unix 毫秒时间戳；undefined 表示仍在停车中 */
+    end_time?: number;
+    /** 停车时长（秒），仅已结束的停车区间有值 */
+    duration_s?: number;
+}
+
+export interface ChurnRankingEntry {
+    rank: number;
+    userId: number | string;
+    name: string;
+    score: number;
+    churn_48h: number;
+    hourly_churn: ChurnHourlyEntry[];
+    last_change: ChurnLastChange | null;
+    recent_activity: ChurnRecentActivity;
+    parking_periods: ChurnParkingPeriod[];
+}
+
+export interface ChurnApiResponse {
+    event_id: number;
+    region: RealtimeRankingRegion;
+    updated_at: number;
+    rankings: ChurnRankingEntry[];
+}

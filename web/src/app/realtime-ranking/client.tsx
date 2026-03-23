@@ -9,12 +9,14 @@ import CurrentEventCard from "@/components/realtime-ranking/CurrentEventCard";
 import { useTheme } from "@/contexts/ThemeContext";
 import { fetchMasterData } from "@/lib/fetch";
 import { fetchEventList } from "@/lib/prediction-api";
-import { fetchRealtimeRanking, fetchRealtimeRankingMasterData } from "@/lib/realtime-ranking-api";
+import { fetchRealtimeRanking, fetchRealtimeRankingMasterData, fetchChurnData } from "@/lib/realtime-ranking-api";
+import ParkingPeriodsModal from "@/components/realtime-ranking/ParkingPeriodsModal";
 import {
     RealtimeRankingEntryWithDiff,
     RealtimeRankingMasterData,
     RealtimeRankingRegion,
     RealtimeRankingSnapshot,
+    ChurnRankingEntry,
 } from "@/types/realtime-ranking";
 import { IEventInfo } from "@/types/events";
 import { EventListItem } from "@/types/prediction";
@@ -71,6 +73,13 @@ const EMPTY_MASTER_DATA: RealtimeRankingMasterData = {
     bondsHonorWords: [],
     gameCharaUnits: [],
 };
+
+/** 获取当前小时的 ISO key，如 "2026-03-23T14:00:00Z" */
+function getCurrentHourKey(): string {
+    const now = new Date();
+    now.setMinutes(0, 0, 0);
+    return now.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
 
 function decodeHtmlEntities(value: string): string {
     if (typeof window === "undefined") return value;
@@ -135,10 +144,38 @@ function RealtimeRankingContent() {
     const [currentEvent, setCurrentEvent] = useState<IEventInfo | null>(null);
     const [secondsSinceUpdate, setSecondsSinceUpdate] = useState(0);
     const [activeRank, setActiveRank] = useState<number | null>(null);
+    const [showChurn, setShowChurn] = useState<boolean>(() => {
+        if (typeof window === "undefined") return false;
+        try { return localStorage.getItem("realtime-ranking:showChurn") === "1"; } catch { return false; }
+    });
+    const [churnData, setChurnData] = useState<Map<string, ChurnRankingEntry>>(new Map());
+    const [parkingModalUserId, setParkingModalUserId] = useState<string | null>(null);
     const requestIdRef = useRef(0);
     const snapshotRef = useRef<RealtimeRankingSnapshot | null>(null);
     const lastUpdateTimeRef = useRef<number>(Date.now());
     const lastChangesRef = useRef(new Map<string, { rankDelta: number; scoreDelta: number; changedAt: number }>());
+    const churnDataRef = useRef<Map<string, ChurnRankingEntry>>(new Map());
+
+    /** 热更：某用户分数变化时，更新其当前小时的周回计数 */
+    const updateChurnForUser = useCallback((userId: string) => {
+        const map = churnDataRef.current;
+        const entry = map.get(userId);
+        if (!entry) return;
+
+        const hourKey = getCurrentHourKey();
+        const existing = entry.hourly_churn.find((h) => h.hour === hourKey);
+        if (existing) {
+            existing.count += 1;
+        } else {
+            entry.hourly_churn.push({ hour: hourKey, count: 1 });
+        }
+        entry.churn_48h += 1;
+
+        // 触发 React 重渲染
+        const next = new Map(map);
+        setChurnData(next);
+        churnDataRef.current = next;
+    }, []);
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
@@ -169,6 +206,15 @@ function RealtimeRankingContent() {
             const previous = snapshotRef.current;
             if (asRefresh && previous) {
                 setPreviousSnapshot(previous);
+
+                // 热更周回数据：对比前后 snapshot，若某用户 score 变化则 +1
+                const prevMap = new Map(previous.entries.map((e) => [e.userId, e]));
+                for (const entry of nextSnapshot.entries) {
+                    const prev = prevMap.get(entry.userId);
+                    if (prev && entry.score !== prev.score) {
+                        updateChurnForUser(entry.userId);
+                    }
+                }
             }
             snapshotRef.current = nextSnapshot;
             setSnapshot(nextSnapshot);
@@ -188,7 +234,7 @@ function RealtimeRankingContent() {
             setIsLoading(false);
             setIsRefreshing(false);
         }
-    }, []);
+    }, [updateChurnForUser]);
 
     useEffect(() => {
         let cancelled = false;
@@ -295,11 +341,44 @@ function RealtimeRankingContent() {
         lastChangesRef.current.clear();
         void loadSnapshot(region, false);
 
+        // 首次进入时请求一次 churn 数据
+        let churnCancelled = false;
+        fetchChurnData(region)
+            .then((data) => {
+                if (churnCancelled) return;
+                const map = new Map<string, ChurnRankingEntry>();
+                for (const entry of data.rankings) {
+                    const uid = String(entry.userId);
+                    map.set(uid, entry);
+
+                    // 将 churn 的 last_change 预注入 lastChangesRef，
+                    // 这样首次自动刷新后仍然能显示涨跌幅而不会被覆盖为 "—"
+                    if (entry.last_change && !lastChangesRef.current.has(uid)) {
+                        // 时间戳兼容：秒级 vs 毫秒级
+                        const rawTime = entry.last_change.time;
+                        const changedAt = rawTime < 1e12 ? rawTime * 1000 : rawTime;
+                        lastChangesRef.current.set(uid, {
+                            scoreDelta: entry.last_change.delta,
+                            rankDelta: 0,
+                            changedAt,
+                        });
+                    }
+                }
+                setChurnData(map);
+                churnDataRef.current = map;
+            })
+            .catch(() => {
+                // 周回数据加载失败不影响主功能
+            });
+
         const timer = window.setInterval(() => {
             void loadSnapshot(region, true);
         }, POLL_INTERVAL);
 
-        return () => window.clearInterval(timer);
+        return () => {
+            churnCancelled = true;
+            window.clearInterval(timer);
+        };
     }, [region, loadSnapshot, updateUrlRegion]);
 
     const rankingEntries = useMemo(() => {
@@ -317,6 +396,11 @@ function RealtimeRankingContent() {
                     eventId={snapshot?.eventId}
                     totalEntries={snapshot?.entries.length ?? 0}
                     isRefreshing={isRefreshing}
+                    showChurn={showChurn}
+                    onShowChurnChange={(v) => {
+                        setShowChurn(v);
+                        try { localStorage.setItem("realtime-ranking:showChurn", v ? "1" : "0"); } catch { /* ignore */ }
+                    }}
                 />
 
                 <CurrentEventCard
@@ -342,6 +426,9 @@ function RealtimeRankingContent() {
                         masterData={masterData}
                         assetSource={assetSource}
                         secondsSinceUpdate={secondsSinceUpdate}
+                        showChurn={showChurn}
+                        churnData={churnData}
+                        onShowParkingPeriods={setParkingModalUserId}
                     />
                 )}
             </div>
@@ -450,6 +537,13 @@ function RealtimeRankingContent() {
                     </motion.div>
                 </>
             )}
+
+            {/* 停车区间弹窗 */}
+            <ParkingPeriodsModal
+                userId={parkingModalUserId}
+                churnEntry={parkingModalUserId ? churnData.get(parkingModalUserId) : undefined}
+                onClose={() => setParkingModalUserId(null)}
+            />
         </MainLayout>
     );
 }

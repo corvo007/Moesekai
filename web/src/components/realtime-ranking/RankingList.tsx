@@ -2,7 +2,7 @@
 
 import React from "react";
 import RankingRow from "@/components/realtime-ranking/RankingRow";
-import { RealtimeRankingEntryWithDiff, RealtimeRankingMasterData } from "@/types/realtime-ranking";
+import { RealtimeRankingEntryWithDiff, RealtimeRankingMasterData, ChurnRankingEntry } from "@/types/realtime-ranking";
 import { AssetSourceType } from "@/contexts/ThemeContext";
 
 interface RankingListProps {
@@ -10,9 +10,12 @@ interface RankingListProps {
     masterData: RealtimeRankingMasterData;
     assetSource: AssetSourceType;
     secondsSinceUpdate?: number;
+    showChurn: boolean;
+    churnData: Map<string, ChurnRankingEntry>;
+    onShowParkingPeriods: (userId: string) => void;
 }
 
-export default function RankingList({ entries, masterData, assetSource, secondsSinceUpdate }: RankingListProps) {
+export default function RankingList({ entries, masterData, assetSource, secondsSinceUpdate, showChurn, churnData, onShowParkingPeriods }: RankingListProps) {
     if (entries.length === 0) {
         return (
             <div className="glass-card rounded-2xl p-10 text-center text-slate-500">
@@ -48,6 +51,9 @@ export default function RankingList({ entries, masterData, assetSource, secondsS
                                 masterData={masterData}
                                 assetSource={assetSource}
                                 secondsSinceUpdate={secondsSinceUpdate}
+                                showChurn={showChurn}
+                                churnEntry={churnData.get(entry.userId)}
+                                onShowParkingPeriods={onShowParkingPeriods}
                             />
                         </React.Fragment>
                     );
