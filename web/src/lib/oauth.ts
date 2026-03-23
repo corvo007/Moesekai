@@ -49,6 +49,7 @@ const OAUTH2_SCOPE = process.env.NEXT_PUBLIC_OAUTH2_SCOPE || "user:read bindings
 const OAUTH2_REDIRECT_URI = process.env.NEXT_PUBLIC_OAUTH2_REDIRECT_URI || "";
 const OAUTH_PENDING_KEY = "moesekai_oauth_pending";
 const OAUTH_PENDING_TTL_MS = 10 * 60 * 1000;
+const OAUTH2_REQUEST_TIMEOUT_MS = 15 * 1000;
 
 export function getOAuthConfig() {
     return {
@@ -60,8 +61,8 @@ export function getOAuthConfig() {
 }
 
 function getDefaultRedirectUri(): string {
-    if (typeof window === "undefined") return "/oauth2/callback/code";
-    return new URL("/oauth2/callback/code", window.location.origin).toString();
+    if (typeof window === "undefined") return "/oauth2/callback/code/";
+    return new URL("/oauth2/callback/code/", window.location.origin).toString();
 }
 
 function assertOAuthConfig() {
@@ -159,6 +160,7 @@ export function formatOAuthErrorMessage(error: string): string {
     if (error === "OAUTH_PENDING_MISSING") return "授权会话已失效，请重新发起 OAuth2 绑定。";
     if (error === "OAUTH_STATE_MISMATCH") return "授权状态校验失败，请重新发起 OAuth2 绑定。";
     if (error === "OAUTH_REAUTH_REQUIRED") return "当前授权已失效，请重新授权后再试。";
+    if (error === "OAUTH_REQUEST_TIMEOUT") return "OAuth2 服务响应超时，请稍后重试。";
     if (error.startsWith("TOKEN_EXCHANGE_FAILED_")) return "授权码交换失败，请确认回调地址配置正确并重新授权。";
     if (error.startsWith("TOKEN_REFRESH_FAILED_")) return "授权刷新失败，请重新授权后再试。";
     if (error.startsWith("AUTHORIZED_REQUEST_FAILED_401")) return "授权已过期，请重新授权后再试。";
@@ -168,6 +170,25 @@ export function formatOAuthErrorMessage(error: string): string {
     if (error === "INVALID_OAUTH_BINDING") return "无法识别当前授权账号绑定信息，请重新授权后再试。";
     if (error === "OAuth2 回调参数不完整") return error;
     return error || "OAuth2 处理失败，请稍后重试。";
+}
+
+async function oauthFetch(input: string, init?: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), OAUTH2_REQUEST_TIMEOUT_MS);
+
+    try {
+        return await fetch(input, {
+            ...init,
+            signal: controller.signal,
+        });
+    } catch (error) {
+        if (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError") {
+            throw new Error("OAUTH_REQUEST_TIMEOUT");
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeoutId);
+    }
 }
 
 export async function exchangeCodeForToken(code: string, codeVerifier: string): Promise<OAuthTokenSet> {
@@ -180,7 +201,7 @@ export async function exchangeCodeForToken(code: string, codeVerifier: string): 
         code_verifier: codeVerifier,
     });
 
-    const response = await fetch(`${config.baseUrl}/token`, {
+    const response = await oauthFetch(`${config.baseUrl}/token`, {
         method: "POST",
         headers: {
             "Content-Type": "application/x-www-form-urlencoded",
@@ -212,7 +233,7 @@ export async function refreshOAuthToken(refreshToken: string): Promise<OAuthToke
         refresh_token: refreshToken,
     });
 
-    const response = await fetch(`${config.baseUrl}/token`, {
+    const response = await oauthFetch(`${config.baseUrl}/token`, {
         method: "POST",
         headers: {
             "Content-Type": "application/x-www-form-urlencoded",
@@ -237,7 +258,7 @@ export async function refreshOAuthToken(refreshToken: string): Promise<OAuthToke
 }
 
 export async function revokeOAuthToken(token: string): Promise<void> {
-    const response = await fetch(`${assertOAuthConfig().baseUrl}/revoke`, {
+    const response = await oauthFetch(`${assertOAuthConfig().baseUrl}/revoke`, {
         method: "POST",
         headers: {
             "Content-Type": "application/x-www-form-urlencoded",
@@ -251,7 +272,7 @@ export async function revokeOAuthToken(token: string): Promise<void> {
 }
 
 async function authorizedJson<T>(path: string, accessToken: string): Promise<T> {
-    const response = await fetch(`${assertOAuthConfig().baseUrl}${path}`, {
+    const response = await oauthFetch(`${assertOAuthConfig().baseUrl}${path}`, {
         headers: {
             Authorization: `Bearer ${accessToken}`,
         },

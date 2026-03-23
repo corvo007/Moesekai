@@ -3,11 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import MainLayout from "@/components/MainLayout";
-import {
-    createOrUpdateOAuthAccount,
-    fetchAccountGameData,
-    type HarukiApiResult,
-} from "@/lib/account";
+import { createOrUpdateOAuthAccount } from "@/lib/account";
 import {
     clearPendingOAuthState,
     formatOAuthErrorMessage,
@@ -17,25 +13,6 @@ import {
     resolveOAuthAuthorization,
     type OAuthBinding,
 } from "@/lib/oauth";
-
-function normalizeInitialData(payload: Record<string, unknown>): HarukiApiResult | null {
-    if (!payload.userGamedata) return null;
-    return {
-        success: true,
-        userGamedata: payload.userGamedata as HarukiApiResult["userGamedata"],
-        userDecks: (payload.userDecks as HarukiApiResult["userDecks"]) || [],
-        userCharacters: (payload.userCharacters as HarukiApiResult["userCharacters"]) || [],
-        userChallengeLiveSoloStages: (payload.userChallengeLiveSoloStages as HarukiApiResult["userChallengeLiveSoloStages"]) || [],
-        userChallengeLiveSoloResults: (payload.userChallengeLiveSoloResults as HarukiApiResult["userChallengeLiveSoloResults"]) || [],
-        userChallengeLiveSoloHighScoreRewards: (payload.userChallengeLiveSoloHighScoreRewards as HarukiApiResult["userChallengeLiveSoloHighScoreRewards"]) || [],
-        userBonds: (payload.userBonds as HarukiApiResult["userBonds"]) || [],
-        userMaterials: (payload.userMaterials as HarukiApiResult["userMaterials"]) || [],
-        userAreas: (payload.userAreas as HarukiApiResult["userAreas"]) || [],
-        userMysekaiFixtureGameCharacterPerformanceBonuses: (payload.userMysekaiFixtureGameCharacterPerformanceBonuses as HarukiApiResult["userMysekaiFixtureGameCharacterPerformanceBonuses"]) || [],
-        userMysekaiGates: (payload.userMysekaiGates as HarukiApiResult["userMysekaiGates"]) || [],
-        uploadTime: typeof payload.upload_time === "number" ? payload.upload_time : undefined,
-    };
-}
 
 export default function CallbackClient() {
     const router = useRouter();
@@ -107,61 +84,10 @@ export default function CallbackClient() {
         setLoading(true);
         setError(null);
         try {
-            const payload = await fetchAccountGameData({
-                id: `${server}_${gameId}`,
-                gameId,
-                server,
-                nickname: "",
-                avatarCharacterId: null,
-                avatarCardId: null,
-                isApiPublic: false,
-                authSource: "oauth2",
-                oauthSubject: String(source.profile?.sub ?? source.profile?.id ?? source.profile?.userId ?? "") || null,
-                oauthScopes: source.tokenSet.scope,
-                oauthToken: {
-                    accessToken: source.tokenSet.accessToken,
-                    refreshToken: source.tokenSet.refreshToken,
-                    expiresAt: source.tokenSet.expiresAt,
-                    tokenType: source.tokenSet.tokenType,
-                    scope: source.tokenSet.scope,
-                },
-                oauthBindingId: String(binding.bindingId ?? binding.id ?? "") || null,
-                lastSyncAt: null,
-                authError: null,
-                userCharacters: null,
-                userGamedata: null,
-                userDecks: null,
-                userChallengeLiveSoloStages: null,
-                userChallengeLiveSoloResults: null,
-                userChallengeLiveSoloHighScoreRewards: null,
-                userBonds: null,
-                userMaterials: null,
-                userAreas: null,
-                userMysekaiFixtureGameCharacterPerformanceBonuses: null,
-                userMysekaiGates: null,
-                uploadTime: null,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-            }, [
-                "userGamedata",
-                "userDecks",
-                "userCharacters",
-                "userChallengeLiveSoloStages",
-                "userChallengeLiveSoloResults",
-                "userChallengeLiveSoloHighScoreRewards",
-                "userBonds",
-                "userMaterials",
-                "userAreas",
-                "userMysekaiFixtureGameCharacterPerformanceBonuses",
-                "userMysekaiGates",
-                "upload_time",
-            ]);
-
             const account = createOrUpdateOAuthAccount({
                 binding,
                 profile: source.profile,
                 tokenSet: source.tokenSet,
-                initialData: normalizeInitialData(payload),
             });
             clearPendingOAuthState();
             router.replace(`${returnTo}${returnTo.includes("?") ? "&" : "?"}oauth=success&account=${encodeURIComponent(account.id)}`);
