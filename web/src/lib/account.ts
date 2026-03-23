@@ -139,7 +139,7 @@ export interface HarukiApiResult {
     uploadTime?: number;
 }
 
-import { fetchOAuthGameData, refreshOAuthToken, revokeOAuthToken, type OAuthBinding, type OAuthProfile, type OAuthTokenSet } from "./oauth";
+import { fetchOAuthGameData, fetchOAuthGameDataSuite, refreshOAuthToken, revokeOAuthToken, type OAuthBinding, type OAuthProfile, type OAuthTokenSet } from "./oauth";
 
 const HARUKI_PUBLIC_API_BASE = "https://suite-api.haruki.seiunx.com/public";
 const ACCOUNTS_KEY = "moesekai_accounts";
@@ -288,6 +288,15 @@ export async function fetchAccountGameData(account: MoesekaiAccount, keys: strin
     if (account.authSource === "oauth2") {
         try {
             const token = await getRefreshedOAuthToken(account);
+            if (keys.length > 1) {
+                const suite = await fetchOAuthGameDataSuite(token.accessToken, account.server, account.gameId);
+                const merged: Record<string, unknown> = {};
+                keys.forEach((key) => {
+                    merged[key] = suite[key];
+                });
+                return merged;
+            }
+
             const requests = await Promise.all(keys.map(async (key) => [
                 key,
                 await fetchOAuthGameData(token.accessToken, account.server, key, account.gameId),

@@ -418,6 +418,10 @@ export async function fetchOAuthGameData(accessToken: string, server: ServerType
     return authorizedJson(`/game-data/${server}/${encodeURIComponent(dataType)}/${encodeURIComponent(userId)}`, accessToken);
 }
 
+export async function fetchOAuthGameDataSuite(accessToken: string, server: ServerType, userId: string): Promise<Record<string, unknown>> {
+    return authorizedJson<Record<string, unknown>>(`/game-data/${server}/suite/${encodeURIComponent(userId)}`, accessToken);
+}
+
 export async function resolveOAuthAuthorization(
     code: string,
     state: string,
